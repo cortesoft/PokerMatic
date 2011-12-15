@@ -1,5 +1,131 @@
 module PokerMatic
 require 'set'
+
+class NetworkGame
+	attr_accessor :started
+
+	def initialize(server, table_channel, table, min_players = 2, log_mutex = nil)
+		@server = server
+		@table_channel = table_channel
+		@table = table
+		@log_mutex = log_mutex || Mutex.new
+		@started = false
+		@queue = []
+		@mutex = Mutex.new
+		@min_players = min_players
+		@channel_hash = {}
+		@hand_number = 0
+	end
+	
+	def log(m, use_pp = false)
+		@log_mutex.synchronize do
+			if use_pp
+				pp m
+			else
+				puts "#{Time.now}: #{m}"
+			end
+		end
+	end
+
+	def join_table(player, channel)
+		@mutex.synchronize do
+			@channel_hash[player] = channel
+			if !@started
+				@table.add_player(player) unless @table.seats.include?(player)
+			else
+				@queue << player
+			end
+		end
+	end
+	
+	def add_players_from_queue
+		@queue.each do |player|
+			@table.add_player(player) unless @table.seats.include?(player)
+		end
+		@queue = []
+	end
+
+	def start_hand
+		log "Starting hand"
+		@hand_number += 1
+		@table.deal
+		send_player_hands
+		send_game_state
+	end
+
+	def send_player_hands
+		@channel_hash.each do |player, channel|
+			next if @queue.include?(player)
+			hand = @table.hands[player].map {|x| x.to_hash}
+			channel.publish({'type' => 'hand', 'hand_number' => @hand_number,
+				'table_id' => @table_id, 'hand' => hand, 'player' => player.to_hash}.to_json)
+		end
+	end
+
+	def send_game_state
+		@table_channel.publish({'hand_number' => @hand_number, 'table_id' => @table_id,
+			'state' => @table.table_state_hash, 'type' => 'game_state'}.to_json)
+	end
+
+	def send_winner(winner_hash)
+		hsh = {'hand_number' => @hand_number, 'table_id' => @table_id,
+			'winners' => winner_hash[:winners].map {|x| x.to_hash}, 
+			'winnings' => winner_hash[:winnings], 'type' => 'winner'}
+		if @table.hands.size > 1
+			hsh['shown_hands'] = {}
+			@table.hands.each do |player, hand|
+				hsh['shown_hands'][player.name] = hand.map {|x| x.to_hash}
+			end
+		end
+		@table_channel.publish(hsh.to_json)
+	end
+
+	def check_start
+		@mutex.synchronize do
+			if !@started and @table.seats.size >= @min_players
+				log "Starting game at table #{@table.table_id} with #{@table.seats.size} players"
+				@table.randomize_button
+				start_hand
+			end
+		end
+	end
+	
+	def take_action(player, action)
+		if action == 'fold'
+			log "Folding for #{player.name}"
+			@table.fold(player)
+		elsif action == 'check'
+			puts "Checking for #{player.name}"
+			@table.check(player)
+		elsif action == 'call'
+			@table.call(player)
+		else
+			puts "Betting #{action.to_i} for #{player.name}"
+			@table.bet(player, action.to_i)
+		end
+		@table.betting_complete? ? next_round : send_game_state
+	end
+	
+	def next_round
+		if @table.hand_over?
+			log "#### HAND OVER #####"
+			log "Board is \n\n#{@table.board_string}\n\n"
+			log "Hands still in:\n\n"
+			@table.hands.each do |player, hand|
+				log "#{player.name}: #{hand.join(", ")}"
+			end
+			log "\n\n"
+			log "#################"
+			winner_hash = @table.showdown
+			send_winner(winner_hash)
+			start_hand
+		else
+			@table.deal
+			send_game_state
+		end
+	end
+end
+
 class QuickGame
 	attr_reader :table
 	def initialize(blinds = 1)
@@ -62,10 +188,11 @@ class QuickGame
 end #class QuickGame
 
 class Player
-	attr_reader :bankroll, :name
-	def initialize(name, bankroll = 500)
+	attr_reader :bankroll, :name, :player_id
+	def initialize(name, player_id = nil, bankroll = 500)
 		@bankroll = bankroll
 		@name = name
+		@player_id = player_id.to_i
 	end
 
 	def make_bet(amount)
@@ -77,15 +204,19 @@ class Player
 		@bankroll += amount
 		amount
 	end
+	
+	def to_hash
+		{'name' => @name, 'bankroll' => @bankroll, 'id' => @player_id}
+	end
 end #class Player
 
 # Represents a table of poker players
 class Table
 	attr_reader :board, :button, :phase, :small_blind, :seats, :pot, :current_bet,
-		:minimum_bet, :current_bets, :hands
+		:minimum_bet, :current_bets, :hands, :table_id
 
 	PHASES = ['New Hand', 'Pre-Flop', 'Flop', 'Turn', 'River']
-	def initialize(small_blind = 1)
+	def initialize(small_blind = 1, table_id = nil)
 		@seats = []
 		@button = 0
 		@deck = Deck.new
@@ -93,8 +224,28 @@ class Table
 		@board = []
 		@phase = 0
 		@small_blind = 1
+		@table_id = table_id
 	end
 	
+	def table_state_hash
+		hsh = {
+			'phase' => @phase,
+			'phase_name' => PHASES[@phase],
+			'button' => @button,
+			'pot' => @pot,
+			'current_bet' => @current_bet,
+			'players' => @seats.map {|p| p.to_hash},
+			'acting_player' => acting_player.to_hash,
+			'board' => @board.map {|c| c.to_hash },
+			'players_in_hand' => @hands.keys.map {|p| p.player_id.to_i},
+			'player_bets' => {}
+		}
+		@current_bets.each do |player, bet|
+			hsh['player_bets'][player.player_id] = bet
+		end
+		hsh
+	end
+
 	def add_player(player)
 		@seats << player
 	end
@@ -109,7 +260,7 @@ class Table
 	end
 
 	def hand_over?
-		betting_complete? and @phase == 4
+		(betting_complete? and @phase == 4) or @hands.size == 1
 	end
 
 	def increase_blinds(multiplier = 2)
@@ -271,6 +422,11 @@ class Table
 		end
 		@phase = 0
 		@button = (@button + 1) % @seats.size
+		@board = []
+		@hands = {}
+		@pot = 0
+		@current_bets = {}
+		@current_bet = @small_blind * 2
 		{:winners => top_hands.keys, :winnings => winnings}
 	end
 end #class Table
@@ -324,6 +480,10 @@ class Card
 		@value = value
 	end
 	
+	def to_hash
+		{'suit' => @suit, 'value' => @value, 'name' => value_name, 'string' => to_s}
+	end
+
 	def value_name
 		VAL_TO_NAME[@value] || @value
 	end
