@@ -85,6 +85,7 @@ class NetworkGame
 			if !@started and @table.seats.size >= @min_players
 				log "Starting game at table #{@table.table_id} with #{@table.seats.size} players"
 				@table.randomize_button
+				@started = true
 				start_hand
 			end
 		end
