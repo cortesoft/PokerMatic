@@ -56,6 +56,7 @@ class PokerServer
 
 	def setup_listeners
 		@registration_sub = @registration.subscribe("reg_sub")
+		@registration_sub.last = Time.now.to_i
 		@registration_sub.add_listener('reg_sub') {|m| process_registration(m)}
 		@registration_sub.start_listening
 		@create_table_sub = @create_table_channel.subscribe('create_table_sub')

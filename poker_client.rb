@@ -116,6 +116,7 @@ class PokerClient
 			@reg_response = new_sub(@discovery['registration_response']['url'],
 				@discovery['registration_response']['capability'])
 			@command_id = rand(99999999)
+			@reg_response.last = Time.now.to_i - 5
 			@reg_response.add_listener('reg_response') {|m| user_created(m)}
 			@reg_response.start_listening
 			@create_player_channel = new_channel(@discovery['registration']['url'],
@@ -185,6 +186,7 @@ class PokerClient
 				@discovery['tables']['capability'])
 		@create_table_channel = new_channel(@discovery['create_table']['url'],
 				@discovery['create_table']['capability'])
+		@table_response.last = Time.now.to_i - 5
 		@table_response.add_listener('table_response') {|m| my_table_created(m)}
 		@table_response.start_listening
 		@create_table_channel.publish({'name' => name, 'id' => @table_command_id,

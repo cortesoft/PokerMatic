@@ -104,6 +104,10 @@ class NetworkGame
 			@table.bet(player, action.to_i)
 		end
 		@table.betting_complete? ? next_round : send_game_state
+	rescue
+		log "Rescued error #{$!.inspect}"
+		log $!.backtrace.join("\n")
+		send_game_state
 	end
 	
 	def next_round
