@@ -446,6 +446,8 @@ class Table
 		raise "Bet must be greater than or equal to #{@current_bet}" if @current_bet > new_amount
 		raise "Minimum raise is #{@minimum_bet} and your raise is #{new_amount - @current_bet}" if 
 			new_amount > @current_bet and new_amount < (@current_bet + @minimum_bet)
+		raise_amount = new_amount - @current_bet
+		@minimum_bet = raise_amount if raise_amount > @minimum_bet
 		@current_bet = new_amount
 		@current_bets[player] = new_amount
 		@pot += player.make_bet(amount)
@@ -483,6 +485,8 @@ class Table
 			end
 		end
 		@current_bets[player] = all_in_amount
+		raise_amount = all_in_amount - @current_bet
+		@minimum_bet = raise_amount if raise_amount > @minimum_bet
 		@current_bet = all_in_amount if all_in_amount > @current_bet
 		check_side_pots(player, new_bet_amount, current_player_bet)
 		move_position unless @max_can_win.size == @hands.size
@@ -491,7 +495,7 @@ class Table
 
 	def betting_complete?
 		players_in_hand = @hands.size - @max_can_win.size
-		players_in_hand < 1 or @hands.size == 1 or
+		players_in_hand < 1 or @hands.size == 1 or @players_at_start_of_hand == 1 or
 		(@moves_taken >= @players_at_start_of_hand and @current_bets.all? {|player, bet| @max_can_win.keys.include?(player) || bet == @current_bet })
 	end
 	
