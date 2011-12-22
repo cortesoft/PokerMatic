@@ -19,17 +19,18 @@ class PokerServer
 			api_key = API_KEY
 		end
 		@spire.start(api_key)
+		@player_number = Time.now.to_i - 1323827358
+		@table_number = Time.now.to_i - 1323828358
 		@mutex = Mutex.new
 		@log_mutex = Mutex.new
 		@tables = {}
 		@discovery = @spire['discovery']
-		@tables_channel = @spire['tables']
+		@tables_channel = @spire["tables_#{@player_number}"]
 		@registration = @spire['registration']
-		@registration_response = @spire['registration_response']
+		@registration_response = @spire["registration_response_#{@player_number}"]
 		@create_table_channel = @spire['create_table']
 		@players = {}
-		@player_number = Time.now.to_i - 1323827358
-		@table_number = Time.now.to_i - 1323828358
+		@table_names = []
 		payload = {}
 		[['tables', @tables_channel.subscribe("table_sub")],
 		['registration', @registration],
@@ -99,6 +100,8 @@ class PokerServer
 		log command, true
 		@mutex.synchronize do
 			return unless command.has_key?('name')
+			return if @table_names.include?(command['name'])
+			@table_names << command['name']
 			min_players = (command['min_players'] || 2).to_i
 			blinds = (command['blinds'] || 1).to_i
 			@table_number += 1

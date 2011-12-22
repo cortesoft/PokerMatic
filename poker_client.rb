@@ -5,8 +5,8 @@ require 'spire_io'
 
 class PokerClient
 	attr_accessor :player_id, :mutex
-	DISCOVERY_URL = 'https://api.spire.io/subscription/Su-YoEn'
-	DISCOVERY_CAPABILITY = '2Pfe5sqfFdmTuK9Z4fjbXQ='
+	DISCOVERY_URL = 'https://api.spire.io/subscription/Su-dUY'
+	DISCOVERY_CAPABILITY = 'HnN2tnRPNv132PuG7qpjHQ='
 	
 	def initialize
 		@mutex = Mutex.new
@@ -18,26 +18,37 @@ class PokerClient
 	
 	def table_update(m)
 		data = JSON.parse(m)
+		pp data
 		if data['type'] == 'game_state'
-			unless wait_for_hand_data(data['hand_number'])
-				puts "Never got the hand data! FUCCCKKK"
-				return false
+			ith = in_this_hand?(data)
+			if ith
+				unless wait_for_hand_data(data['hand_number'])
+					puts "Never got the hand data! FUCCCKKK"
+					return false
+				end
 			end
 			@mutex.synchronize do
 				print "\n\n\n\n"
 				print_state(data)
 				puts "\n\n\n"
-				puts "Your hole cards are:"
-				hand = @hand_hash[data['hand_number']]
-				puts "| #{hand.map {|x| x['string']}.join(" | ")} |"
+				if ith
+					puts "Your hole cards are:"
+					hand = @hand_hash[data['hand_number']]
+					puts "| #{hand.map {|x| x['string']}.join(" | ")} |"
+				else
+					puts "You are not in this hand.  You will join at the end of this hand"
+				end
 				puts "\n\n"
 				ask_for_move(data) if data['state']['acting_player']['id'] == @player_id
 			end
 		elsif data['type'] == 'winner'
 			@mutex.synchronize do
 				puts "We have a winner!"
-				puts "#{data['winners'].map {|x| x['name']}.join(", ")} won #{data['winnings']}"
+				data['winners'].each do |hsh|
+					puts "#{hsh['player']['name']} won #{hsh['winnings']}"
+				end
 				if data['shown_hands']
+					puts "\n\n"
 					data['shown_hands'].each do |pname, hand|
 						puts "#{pname}: | #{hand.map {|x| x['string']}.join(" | ")} |"
 					end
@@ -46,9 +57,45 @@ class PokerClient
 		end
 	end
 
+	def in_this_hand?(data)
+		data['state']['players'].any? {|p| p['id'] == @player_id}
+	end
+
 	def ask_for_move(data)
-		puts "Your move? (fold, check, call, or a number to bet)"
-		move = gets.chomp
+		available_moves = {}
+		move_num = 1
+		data['state']['available_moves'].sort.reverse.each do |key, value|
+			if key == 'all_in'
+				puts "#{move_num}: All-In (#{value})"
+			elsif key == 'check'
+				puts "#{move_num}: Check"
+			elsif key == 'call'
+				puts "#{move_num}: Call (#{value})"
+			elsif key == 'fold'
+				puts "#{move_num}: Fold"
+			elsif key == 'bet'
+				puts "#{move_num}: Bet (minimum bet is #{value})"
+			end
+			available_moves[move_num] = key
+			move_num += 1
+		end
+		puts "Your move?"
+		move = gets.chomp.to_i
+		unless available_moves[move]
+			puts "Not a valid move"
+			return ask_for_move(data)
+		end
+		move = available_moves[move]
+		if move == 'bet'
+			min_bet = data['state']['available_moves']['bet']
+			max_bet = data['state']['available_moves']['all_in']
+			puts "Bet how much? (#{min_bet} to #{max_bet})"
+			move = gets.chomp.to_i
+			if move < min_bet or move > max_bet
+				puts "Bet must be between #{min_bet} and #{max_bet}"
+				return ask_for_move(data)
+			end
+		end
 		@player_channel.publish({'table_id' => @active_table_number,
 			'command' => 'action', 'action' => move}.to_json)
 	end
@@ -59,11 +106,12 @@ class PokerClient
 		is_active = game_data['state']['acting_player']['id'] == user_data['id']
 		in_hand = game_data['state']['players_in_hand'].include?(user_data['id'])
 		bet = game_data['state']['player_bets'][user_data['id'].to_s]
+		all_in = user_data['bankroll'] == 0
 		ar = []
 		ar << "#######"
 		ar << "##{user_data['name'][0,5].center(5)}#"
 		ar << (is_button ? "#  B  #" : "#     #")
-		ar << (is_active ? "# Act #" : "#######")
+		ar << (all_in ? "#ALLIN#" : (is_active ? "# Act #" : "#######"))
 		ar << "# Bet #"
 		ar << (in_hand ? "##{bet.to_s.center(5)}#" : "# Fold#")
 		ar << "#Stack#"
@@ -74,6 +122,9 @@ class PokerClient
 	def print_state(data)
 		state = data['state']
 		puts "##################################"
+		if state['players_waiting_to_join'].size > 0
+			puts "Players waiting to join: #{state['players_waiting_to_join'].map {|x| x['name']}.join(", ")}"
+		end
 		puts "Hand number #{data['hand_number']}"
 		puts state['phase_name']
 		puts "Pot #{state['pot']} Current Bet #{state['current_bet']}"
@@ -92,11 +143,16 @@ class PokerClient
 
 	def player_update(m)
 		data = JSON.parse(m)
-		return unless data['type'] == 'hand'
-		@mutex.synchronize do
-			#puts "Got hand update for #{data['hand_number']}"
-			@hand_hash[data['hand_number']] = data['hand']
-			@bankroll = data['player']['bankroll']
+		if data['type'] == 'hand'
+			@mutex.synchronize do
+				#puts "Got hand update for #{data['hand_number']}"
+				@hand_hash[data['hand_number']] = data['hand']
+				@bankroll = data['player']['bankroll']
+			end
+		elsif data['type'] == 'error'
+			@mutex.synchronize do
+				puts "Invalid move: #{data['message']}"
+			end
 		end
 	end
 
@@ -129,6 +185,7 @@ class PokerClient
 	def user_created(m)
 		resp = JSON.parse(m)
 		if resp['command_id'] == @command_id
+			puts "Player created"
 			@mutex.synchronize do
 				@player_channel = new_channel(resp['url'], resp['capability'])
 				@player_updates = new_sub(resp['response_url'], resp['response_capability'])
@@ -210,11 +267,12 @@ if $PROGRAM_NAME == __FILE__
 	name = gets.chomp
 	client.create_user(name)
 	while true
-		sleep 1
+		should_exit = false
 		client.mutex.synchronize do
-			next unless client.player_id
+			should_exit = !!client.player_id
 		end
-		break
+		break if should_exit
+		sleep 1
 	end
 	puts "Join a room or create a new one? 'join' or name of room"
 	if 'join' == (choice = gets.chomp)

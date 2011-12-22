@@ -10,7 +10,6 @@ class NetworkGame
 		@table = table
 		@log_mutex = log_mutex || Mutex.new
 		@started = false
-		@queue = []
 		@mutex = Mutex.new
 		@min_players = min_players
 		@channel_hash = {}
@@ -33,20 +32,18 @@ class NetworkGame
 			if !@started
 				@table.add_player(player) unless @table.seats.include?(player)
 			else
-				@queue << player
+				@table.queue << player
 			end
 		end
 	end
 	
 	def add_players_from_queue
-		@queue.each do |player|
-			@table.add_player(player) unless @table.seats.include?(player)
-		end
-		@queue = []
+		@table.add_players_from_queue
 	end
 
 	def start_hand
 		log "Starting hand"
+		add_players_from_queue
 		@hand_number += 1
 		@table.deal
 		send_player_hands
@@ -55,25 +52,26 @@ class NetworkGame
 
 	def send_player_hands
 		@channel_hash.each do |player, channel|
-			next if @queue.include?(player)
+			next if @table.queue.include?(player)
+			next unless @table.hands[player]
 			hand = @table.hands[player].map {|x| x.to_hash}
 			channel.publish({'type' => 'hand', 'hand_number' => @hand_number,
 				'table_id' => @table_id, 'hand' => hand, 'player' => player.to_hash}.to_json)
 		end
 	end
 
-	def send_game_state
+	def send_game_state(no_active = false)
 		@table_channel.publish({'hand_number' => @hand_number, 'table_id' => @table_id,
-			'state' => @table.table_state_hash, 'type' => 'game_state'}.to_json)
+			'state' => @table.table_state_hash(no_active), 'type' => 'game_state'}.to_json)
 	end
 
-	def send_winner(winner_hash)
+	def send_winner(winner_hash, hands)
 		hsh = {'hand_number' => @hand_number, 'table_id' => @table_id,
-			'winners' => winner_hash[:winners].map {|x| x.to_hash}, 
-			'winnings' => winner_hash[:winnings], 'type' => 'winner'}
-		if @table.hands.size > 1
+			'winners' => winner_hash.to_a.map {|p, w| {'player' => p.to_hash, 'winnings' => w} },
+			'type' => 'winner'}
+		if hands.size > 1
 			hsh['shown_hands'] = {}
-			@table.hands.each do |player, hand|
+			hands.each do |player, hand|
 				hsh['shown_hands'][player.name] = hand.map {|x| x.to_hash}
 			end
 		end
@@ -100,14 +98,19 @@ class NetworkGame
 			@table.check(player)
 		elsif action == 'call'
 			@table.call(player)
+		elsif action == 'all_in'
+			@table.bet(player, player.bankroll)
 		else
 			puts "Betting #{action.to_i} for #{player.name}"
 			@table.bet(player, action.to_i)
 		end
 		@table.betting_complete? ? next_round : send_game_state
 	rescue
-		log "Rescued error #{$!.inspect}"
+		log "Rescued action error #{$!.inspect}"
 		log $!.backtrace.join("\n")
+		@channel_hash[player].publish({'type' => 'error', 'hand_number' => @hand_number,
+			'table_id' => @table_id, 'message' => $!.message}.to_json)
+		sleep 2
 		send_game_state
 	end
 	
@@ -121,12 +124,23 @@ class NetworkGame
 			end
 			log "\n\n"
 			log "#################"
+			hands = @table.hands.dup
 			winner_hash = @table.showdown
-			send_winner(winner_hash)
-			start_hand
+			send_winner(winner_hash, hands)
+			@table.remove_busted_players
+			if @table.seats.size > 1
+				start_hand
+			else
+				@started = false
+			end
 		else
 			@table.deal
-			send_game_state
+			if @table.betting_complete?
+				send_game_state(true)
+				next_round
+			else
+				send_game_state
+			end
 		end
 	end
 end
@@ -218,37 +232,74 @@ end #class Player
 # Represents a table of poker players
 class Table
 	attr_reader :board, :button, :phase, :small_blind, :seats, :pot, :current_bet,
-		:minimum_bet, :current_bets, :hands, :table_id
+		:minimum_bet, :current_bets, :hands, :table_id, :queue
 
 	PHASES = ['New Hand', 'Pre-Flop', 'Flop', 'Turn', 'River']
 	def initialize(small_blind = 1, table_id = nil)
 		@seats = []
+		@queue = []
 		@button = 0
 		@deck = Deck.new
 		@hands = {}
 		@board = []
 		@phase = 0
-		@small_blind = 1
+		@small_blind = small_blind
 		@table_id = table_id
 	end
-	
-	def table_state_hash
+
+	def remove_busted_players
+		@seats.each do |player|
+			@queue << player if player.bankroll < big_blind
+		end
+		@seats -= @queue
+	end
+
+	def add_players_from_queue
+		players_to_remove = []
+		@queue.each do |player|
+			next if player.bankroll < @small_blind
+			players_to_remove << player
+			self.add_player(player) unless @seats.include?(player)
+		end
+		@queue -= players_to_remove
+	end
+
+	def table_state_hash(no_active = false)
+		ap = no_active ? {} : acting_player.to_hash
 		hsh = {
 			'phase' => @phase,
 			'phase_name' => PHASES[@phase],
 			'button' => @button,
 			'pot' => @pot,
 			'current_bet' => @current_bet,
+			'minimum_bet' => @minimum_bet,
 			'players' => @seats.map {|p| p.to_hash},
-			'acting_player' => acting_player.to_hash,
+			'acting_player' => ap,
 			'board' => @board.map {|c| c.to_hash },
 			'players_in_hand' => @hands.keys.map {|p| p.player_id.to_i},
-			'player_bets' => {}
+			'players_waiting_to_join' => @queue.map {|p| p.to_hash },
+			'player_bets' => {},
+			'available_moves' => available_moves,
+			'all_in' => @max_can_win.map {|p, mcw| {'player' => p.to_hash, 'pot' => mcw}}
 		}
 		@current_bets.each do |player, bet|
 			hsh['player_bets'][player.player_id] = bet
 		end
 		hsh
+	end
+
+	def available_moves
+		am = {}
+		cb = @current_bets[acting_player] || 0
+		if cb == @current_bet
+			am['check'] = 0
+		else
+			am['call'] = @current_bet - cb
+		end
+		am['bet'] = @minimum_bet + (@current_bet - cb)
+		am['all_in'] = acting_player.bankroll
+		am['fold'] = 0
+		am
 	end
 
 	def add_player(player)
@@ -277,7 +328,7 @@ class Table
 		small = @seats[person_in_spot(@button + 1)]
 		big = @seats[person_in_spot(@button + 2)]
 		@current_bets[small] = small.make_bet(@small_blind)
-		@current_bets[big] = big.make_bet(@small_blind * 2)
+		@current_bets[big] = big.make_bet(big_blind)
 	end
 
 	def randomize_button
@@ -294,7 +345,10 @@ class Table
 			num_spaces.times { move_position }
 		else
 			@current_position = person_in_spot(@current_position + 1)
-			move_position unless @hands.keys.include?(@seats[@current_position])
+			p = @seats[@current_position]
+			if @hands.size > @max_can_win.size
+				move_position if !@hands.keys.include?(p) or @max_can_win.keys.include?(p)
+			end
 		end
 	end
 
@@ -311,7 +365,8 @@ class Table
 			when 3 then turn_or_river
 		end
 		@current_position = @button
-		@minimum_bet = @small_blind * 2
+		@players_at_start_of_hand = @hands.size - @max_can_win.size
+		@minimum_bet = big_blind
 		move_position(@phase == 0 ? 3 : 1) 
 		@phase += 1
 		@moves_taken = 0
@@ -322,7 +377,8 @@ class Table
 		@hands = {}
 		@pot = 0
 		@current_bets = {}
-		@current_bet = @small_blind * 2
+		@current_bet = big_blind
+		@max_can_win = {}
 		pay_blinds
 		@deck.shuffle
 		2.times do
@@ -336,6 +392,10 @@ class Table
 	def clear_bets
 		@current_bets = {}
 		@current_bet = 0
+	end
+
+	def big_blind
+		@small_blind * 2
 	end
 
 	def flop
@@ -380,6 +440,7 @@ class Table
 
 	def bet(player, amount)
 		ensure_acting_player(player)
+		return go_all_in(player) if amount >= player.bankroll
 		current_player_bet = @current_bets[player] || 0
 		new_amount = current_player_bet + amount
 		raise "Bet must be greater than or equal to #{@current_bet}" if @current_bet > new_amount
@@ -388,16 +449,58 @@ class Table
 		@current_bet = new_amount
 		@current_bets[player] = new_amount
 		@pot += player.make_bet(amount)
+		check_side_pots(player, amount, current_player_bet)
 		move_position
 		@moves_taken += 1
 	end
 
+	#Sees if we need to add any money into the side pots
+	def check_side_pots(player, amount, current_player_bet)
+		return unless @max_can_win.size > 0
+		@max_can_win.each do |other_player, bet|
+			next if other_player == player
+			next unless cb = @current_bets[other_player]
+			next if cb <= current_player_bet
+			if amount > (cb - current_player_bet)
+				@max_can_win[other_player] += (cb - current_player_bet)
+			else
+				@max_can_win[other_player] += amount
+			end
+		end
+	end
+
+	#Goes all in
+	def go_all_in(player)
+		current_player_bet = @current_bets[player] || 0
+		new_bet_amount = player.bankroll
+		all_in_amount = new_bet_amount + current_player_bet
+		@pot += player.make_bet(new_bet_amount)
+		@max_can_win[player] = @pot
+		@current_bets.each do |other_player, bet|
+			next if other_player == player
+			if bet > all_in_amount #we need to subtract some of the current pot
+				@max_can_win[player] -= (bet - all_in_amount)
+			end
+		end
+		@current_bets[player] = all_in_amount
+		@current_bet = all_in_amount if all_in_amount > @current_bet
+		check_side_pots(player, new_bet_amount, current_player_bet)
+		move_position unless @max_can_win.size == @hands.size
+		@moves_taken += 1
+	end
+
 	def betting_complete?
-		@hands.size == 1 or (@moves_taken >= @hands.size and @current_bets.values.all? {|x| x == @current_bets.values.first })
+		players_in_hand = @hands.size - @max_can_win.size
+		players_in_hand < 1 or @hands.size == 1 or
+		(@moves_taken >= @players_at_start_of_hand and @current_bets.all? {|player, bet| @max_can_win.keys.include?(player) || bet == @current_bet })
 	end
 	
 	#Returns the winning user(s) and adds their winnings
-	def showdown
+	def showdown(winners_hash = {}, won_so_far = 0)
+		puts "Starting showdown with hash:"
+		pp winners_hash
+		puts "Max can win:"
+		pp @max_can_win
 		top_hands = {}
 		current_top = nil
 		@hands.each do |player, hand|
@@ -421,9 +524,33 @@ class Table
 				end
 			end
 		end
+		if @max_can_win.any? {|player, max_win| top_hands.keys.include?(player)} #One or more players had a side pot
+			puts "At least one winner was in the side pot"
+			@max_can_win.sort_by {|player, max_win| max_win}.each do |player, max_win|
+				next unless top_hands.keys.include?(player)
+				puts "Player #{player.name} was a winner, the current pot is #{@pot} and we have won #{won_so_far} so far.. max win is #{max_win}"
+				winnings = (max_win - won_so_far) / top_hands.size
+				winnings = @pot if winnings > @pot
+				if winnings > 0
+					puts "Winning #{winnings} for #{player.name}"
+					player.take_winnings(winnings)
+					@pot -= winnings
+					won_so_far += winnings
+					winners_hash[player] = winnings
+				else
+					puts "Not enough in the pot for this guy to win anything, moving on.. he wanted #{winnings}"
+				end
+				top_hands.delete(player)
+				@hands.delete(player)
+			end
+			if @pot > 0 and top_hands.size == 0 #we need to recurse
+				return showdown(winners_hash, won_so_far)
+			end
+		end
 		winnings = @pot / top_hands.size.to_f
 		top_hands.each do |player, hand|
 			player.take_winnings(winnings)
+			winners_hash[player] = winnings
 		end
 		@phase = 0
 		@button = (@button + 1) % @seats.size
@@ -432,7 +559,7 @@ class Table
 		@pot = 0
 		@current_bets = {}
 		@current_bet = @small_blind * 2
-		{:winners => top_hands.keys, :winnings => winnings}
+		winners_hash
 	end
 end #class Table
 
