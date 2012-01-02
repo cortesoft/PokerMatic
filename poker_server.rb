@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-API_KEY = nil
+require 'config.rb'
 require 'rubygems'
 require 'poker.rb'
 require 'pp'

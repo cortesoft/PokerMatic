@@ -1,6 +1,5 @@
 class PokerClientBase
 	attr_accessor :player_id, :mutex
-	
 
 	def initialize(discovery_url = nil, discovery_capability = nil)
 		@mutex = Mutex.new
@@ -102,16 +101,30 @@ class PokerClientBase
 	def table_update_proxy(m)
 		parsed = JSON.parse(m)
 		if parsed['type'] == 'game_state'
-			hand = nil
-			gs = nil
-			@mutex.synchronize do
-				hand = @hand_hash[parsed['hand_number']]
-				gs = GameState.new(parsed, @player_id, hand)
-				@game_state_hash[parsed['hand_number']] = gs
-			end
-			table_update(gs)
+			game_state_update(parsed)
 		elsif parsed['type'] == 'winner'
 			winner_update(parsed)
+		end
+	end
+
+	def game_state_update(parsed_state)
+		hand = nil
+		game_state = nil
+		@mutex.synchronize do
+			hand = @hand_hash[parsed_state['hand_number']]
+			game_state = GameState.new(parsed_state, @player_id, hand)
+			@game_state_hash[parsed_state['hand_number']] = game_state
+		end
+		if game_state.in_this_hand?
+			return false unless wait_for_hand_data(game_state['hand_number'])
+		end
+		@mutex.synchronize do
+			self.display_game_state(game_state) if self.respond_to?(:display_game_state)
+			if game_state.is_acting_player?
+				move = ask_for_move(game_state)
+				@player_channel.publish({'table_id' => @active_table_number,
+					'command' => 'action', 'action' => move}.to_json)
+			end
 		end
 	end
 

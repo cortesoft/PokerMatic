@@ -1,2 +1,4 @@
 DISCOVERY_URL = 'https://api.spire.io/subscription/Su-coEP'
 DISCOVERY_CAPABILITY = 'igdCFmyQHPWpnHCWS1e7lCA='
+#FOR THE SERVER
+API_KEY = "YOUR SPIRE IO API KEY"

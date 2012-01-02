@@ -101,7 +101,7 @@ class NetworkGame
 		elsif action == 'all_in'
 			@table.bet(player, player.bankroll)
 		else
-			puts "Betting #{action.to_i} for #{player.name}"
+			puts "Betting #{action} for #{player.name}"
 			@table.bet(player, action.to_i)
 		end
 		@table.betting_complete? ? next_round : send_game_state

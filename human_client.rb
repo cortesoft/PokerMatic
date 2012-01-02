@@ -8,28 +8,18 @@ class HumanClient < PokerClientBase
 	def initialize
 		super
 	end
-	
-	def table_update(game_state)
-		pp game_state
+
+	def display_game_state(game_state)
+		print "\n\n\n\n"
+		print_state(game_state)
+		puts "\n\n\n"
 		if game_state.in_this_hand?
-			unless wait_for_hand_data(game_state['hand_number'])
-				puts "Never got the hand data! FUCCCKKK"
-				return false
-			end
+			puts "Your hole cards are:"
+			puts "| #{game_state.hand.map {|x| x['string']}.join(" | ")} |"
+		else
+			puts "You are not in this hand.  You will join at the end of this hand"
 		end
-		@mutex.synchronize do
-			print "\n\n\n\n"
-			print_state(game_state)
-			puts "\n\n\n"
-			if game_state.in_this_hand?
-				puts "Your hole cards are:"
-				puts "| #{game_state.hand.map {|x| x['string']}.join(" | ")} |"
-			else
-				puts "You are not in this hand.  You will join at the end of this hand"
-			end
-			puts "\n\n"
-			ask_for_move(game_state) if game_state.is_acting_player?
-		end
+		puts "\n\n"
 	end
 
 	def winner_update(data)

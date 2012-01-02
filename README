@@ -2,4 +2,4 @@ Using the Poker Client
 
 * Install the spire.io.rb gem (https://github.com/spire-io/spire.io.rb)
 * Run the poker client program
-* ./poker_client.rb
+* ./human_client.rb
