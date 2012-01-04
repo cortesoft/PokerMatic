@@ -1,3 +1,18 @@
+require 'config.rb' if File.exists?('config.rb')
+if !defined?(USE_ENCRYPTION) or USE_ENCRYPTION
+	require 'rubygems'
+	require 'openpgp'
+	require 'openssl'
+else
+	USE_ENCRYPTION = false
+end
+
+#The PokerClientBase class contains all the code needed to create PokerServer clients
+#This class should be extended to create your own client; it will not work on its own
+#The only method absolutely needed for your client is ask_for_move, which is called every
+#time it is the client's turn to make a move.  It is passed a GameState object, which
+#is a representation of the current state of the game
+#NOTE: Make sure to call super on your subclass's initialize method
 class PokerClientBase
 	attr_accessor :player_id, :mutex
 
@@ -12,19 +27,30 @@ class PokerClientBase
 	end
 	
 	def get_discovery_url
-		require 'config.rb'
-		DISCOVERY_URL
+		if defined?(DISCOVERY_URL)
+			DISCOVERY_URL
+		else
+			puts "Discovery url?"
+			gets.chomp
+		end
 	end
 	
 	def get_discovery_capability
-		require 'config.rb'
-		DISCOVERY_CAPABILITY
+		if defined?(DISCOVERY_CAPABILITY)
+			DISCOVERY_CAPABILITY
+		else
+			puts "Discovery capability?"
+			gets.chomp
+		end
 	end
-	
+
+	#Called whenever there is an update for the player, either an error or hand information
+	#Stores the hand data for late reference
 	def player_update(data)
 		if data['type'] == 'hand'
 			@mutex.synchronize do
 				@hand_hash[data['hand_number']] = data['hand']
+				@seat_number = data['seat_number']
 				@bankroll = data['player']['bankroll']
 				if @game_state_hash[data['hand_number']]
 					@game_state_hash[data['hand_number']].set_hand(data['hand'])
@@ -34,13 +60,18 @@ class PokerClientBase
 			invalid_move(data)
 		end
 	end
-	
+
+	#Called when the client makes an invalid move
+	#Can be overridden by subclasses to handle errors
 	def invalid_move(data)
 		@mutex.synchronize do
 			puts "Invalid move: #{data['message']}"
 		end
 	end
 
+	#Waits to get the client's hole cards before returning
+	#This is necessary because of the asynchronous nature of the poker server
+	#Called before asking for a move
 	def wait_for_hand_data(hand_number)
 		20.times do
 			@mutex.synchronize do
@@ -50,7 +81,8 @@ class PokerClientBase
 		end
 		false
 	end
-	
+
+	#Registers a user with the given name and waits for the server to respond with the created user
 	def create_user(name)
 		@mutex.synchronize do
 			@reg_response = new_sub(@discovery['registration_response']['url'],
@@ -61,7 +93,12 @@ class PokerClientBase
 			@reg_response.start_listening
 			@create_player_channel = new_channel(@discovery['registration']['url'],
 				@discovery['registration']['capability'])
-			@create_player_channel.publish({'name' => name, 'id' => @command_id}.to_json)
+			hsh = {'name' => name, 'id' => @command_id}
+			if USE_ENCRYPTION
+				@encryption_keys = OpenSSL::PKey::RSA.generate(1024)
+				hsh['public_key'] = @encryption_keys.public_key
+			end
+			@create_player_channel.publish(hsh.to_json)
 		end
 		while true
 			should_exit = false
@@ -73,18 +110,28 @@ class PokerClientBase
 		end
 	end
 
-	#Callback for after a user is created
+	#Callback for whenever a user is created.  If the created user was created by this client,
+	#set the current user to the newly created user
 	def user_created(m)
 		resp = JSON.parse(m)
 		if resp['command_id'] == @command_id
 			@mutex.synchronize do
-				@player_channel = new_channel(resp['url'], resp['capability'])
-				@player_updates = new_sub(resp['response_url'], resp['response_capability'])
+				if USE_ENCRYPTION
+					cap = @encryption_keys.private_decrypt(OpenPGP.dearmor(resp['encrypted_capability']))
+					resp_cap = @encryption_keys.private_decrypt(OpenPGP.dearmor(resp['encrypted_response_capability']))
+				else
+					cap = resp['capability']
+					resp_cap = resp['response_capability']
+				end
+				@player_channel = new_channel(resp['url'], cap)
+				@player_updates = new_sub(resp['response_url'], resp_cap)
 				@player_id = resp['player_id']
 			end
 		end
 	end
 
+	#Joins a table described by data
+	# Data should include an 'id', 'url', 'capability', and 'name'
 	def join_specific_table(data)
 		@hand_hash = {}
 		@game_state_hash = {}
@@ -98,6 +145,7 @@ class PokerClientBase
 		@player_channel.publish({'table_id' => @active_table_number, 'command' => 'join_table'}.to_json)
 	end
 
+	#Listener for table updates, proxys the requests to the correct handler
 	def table_update_proxy(m)
 		parsed = JSON.parse(m)
 		if parsed['type'] == 'game_state'
@@ -107,6 +155,10 @@ class PokerClientBase
 		end
 	end
 
+	#Called whenever a new game state comes in
+	#Creates a GameState object, waits for the hand information to come in,
+	#and calls ask_for_move if it is the clients turn
+	#Also calls display_game_state if the client has defined it
 	def game_state_update(parsed_state)
 		hand = nil
 		game_state = nil
@@ -128,10 +180,12 @@ class PokerClientBase
 		end
 	end
 
+	#Proxies player updates to the correct handler
 	def player_update_proxy(m)
 		player_update(JSON.parse(m))
 	end
 
+	#Callback for a table being created.. joins the table if we created it
 	def my_table_created(m)
 		resp = JSON.parse(m)
 		if resp['command_id'] == @table_command_id
@@ -139,6 +193,10 @@ class PokerClientBase
 		end
 	end
 
+	#Creates a table and joins it
+	# @param [String] name Name for the table
+	# @param [String] min_players Minimum players the table requires before starting game
+	# @param [String] blinds Starting small blind for the table
 	def create_table(name, min_players = 2, blinds = 1)
 		raise "No player yet!" unless @player_id
 		@reg_response.stop_listening if @reg_response
@@ -154,6 +212,31 @@ class PokerClientBase
 			'min_players' => min_players, 'blinds' => blinds}.to_json)
 	end
 
+	# Get a listing of all available tables
+	# @return [Array] An array of hashes describing each table
+	def get_all_tables
+		tc = new_sub(@discovery['tables']['url'], @discovery['tables']['capability'])
+		tc.listen.map {|x| JSON.parse(x) rescue nil}.compact
+	end
+
+	#Displays all available tables and prompts to join one
+	#Uses gets, so requires CLI input
+	def join_table
+		raise "No player yet!" unless @player_id
+		#get all the possible tables
+		all_tables = get_all_tables
+		hsh_map = {}
+		num = 0
+		all_tables.each do |table|
+			num += 1
+			hsh_map[num] = table
+			puts "Table #{num}: #{table['name']} Blinds #{table['blinds']} Min Players #{table['min_players']}"
+		end
+		puts "Join which table?"
+		tnum = gets.chomp.to_i
+		join_specific_table(hsh_map[tnum])
+	end
+
 	def new_sub(url, capability)
 		Spire::Subscription.new(@spire,
 			{'capability' => capability, 'url' => url})
@@ -163,7 +246,12 @@ class PokerClientBase
 		Spire::Channel.new(@spire,
 			{'capability' => capability, 'url' => url})
 	end
-	
+
+	def ask_for_move(game_state)
+		raise "Subclass does not define ask_for_move!"
+	end
+
+	#A class representing the current state of the game
 	class GameState
 		attr_accessor :hand, :player_id
 
@@ -173,10 +261,12 @@ class PokerClientBase
 			@hand = my_hand
 		end
 		
+		#Access the state hash or sub hash directly
 		def [](key)
-			@state_hash[key] || @state_hash['state'][key]
+			self.send(key.to_sym)
 		end
 
+		#Uses method missing to access the underlying state hash
 		def method_missing(meth, *args)
 			if @state_hash.has_key?(meth.to_s)
 				@state_hash[meth.to_s]
@@ -186,19 +276,24 @@ class PokerClientBase
 				super
 			end
 		end
-		
-		def set_hand(hand)
-			@hand = hand
-		end
 
 		def respond_to?(meth)
 			(@state_hash.has_key?(meth.to_s) or @state_hash['state'].has_key?(meth.to_s)) ? true : super
 		end
+
+		#Sets the clients hand for the given game state.  When the hand is returned by the server
+		#before the game state is, the hand is set during initialization, otherwise it is set
+		#at a later time
+		def set_hand(hand)
+			@hand = hand
+		end
 		
+		# returns true if the client is in the hand
 		def in_this_hand?
 			@_ith ||= @state_hash['state']['players'].any? {|p| p['id'] == @player_id}
 		end
 		
+		# returns true if it is the clients turn to act
 		def is_acting_player?
 			@_iap ||= @state_hash['state']['acting_player']['id'] == @player_id
 		end

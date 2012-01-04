@@ -10,6 +10,9 @@ class HumanClient < PokerClientBase
 	end
 
 	def display_game_state(game_state)
+		puts "\n\n\n"
+		pp game_state
+		puts "\n\n\n"
 		print "\n\n\n\n"
 		print_state(game_state)
 		puts "\n\n\n"
@@ -72,8 +75,7 @@ class HumanClient < PokerClientBase
 				return ask_for_move(game_state)
 			end
 		end
-		@player_channel.publish({'table_id' => @active_table_number,
-			'command' => 'action', 'action' => move}.to_json)
+		move
 	end
 
 	#Returns a representation of the users spot
@@ -115,23 +117,6 @@ class HumanClient < PokerClientBase
 
 	def print_board(board)
 		puts "| #{board.map {|x| x['string']}.join(" | ")} |"
-	end
-
-	def join_table
-		raise "No player yet!" unless @player_id
-		#get all the possible tables
-		tc = new_sub(@discovery['tables']['url'], @discovery['tables']['capability'])
-		all_tables = tc.listen.map {|x| JSON.parse(x) rescue nil}.compact
-		hsh_map = {}
-		num = 0
-		all_tables.each do |table|
-			num += 1
-			hsh_map[num] = table
-			puts "Table #{num}: #{table['name']} Blinds #{table['blinds']} Min Players #{table['min_players']}"
-		end
-		puts "Join which table?"
-		tnum = gets.chomp.to_i
-		join_specific_table(hsh_map[tnum])
 	end
 end
 

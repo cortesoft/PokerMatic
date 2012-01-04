@@ -56,7 +56,8 @@ class NetworkGame
 			next unless @table.hands[player]
 			hand = @table.hands[player].map {|x| x.to_hash}
 			channel.publish({'type' => 'hand', 'hand_number' => @hand_number,
-				'table_id' => @table_id, 'hand' => hand, 'player' => player.to_hash}.to_json)
+				'table_id' => @table_id, 'hand' => hand, 'seat_number' => @table.player_position(player),
+				'player' => player.to_hash}.to_json)
 		end
 	end
 
@@ -90,6 +91,7 @@ class NetworkGame
 	end
 	
 	def take_action(player, action)
+		raise "Hand is not started" unless @started
 		if action == 'fold'
 			log "Folding for #{player.name}"
 			@table.fold(player)
@@ -264,6 +266,9 @@ class Table
 		@queue -= players_to_remove
 	end
 
+	#Returns the current state of the table
+	# @param [Boolean] no_active Set to true if there is no currently active player
+	# @return [Hash] A hash representing the state of the table
 	def table_state_hash(no_active = false)
 		ap = no_active ? {} : acting_player.to_hash
 		hsh = {
@@ -275,17 +280,24 @@ class Table
 			'minimum_bet' => @minimum_bet,
 			'players' => @seats.map {|p| p.to_hash},
 			'acting_player' => ap,
+			'acting_seat' => no_active ? @button : @current_position,
 			'board' => @board.map {|c| c.to_hash },
 			'players_in_hand' => @hands.keys.map {|p| p.player_id.to_i},
 			'players_waiting_to_join' => @queue.map {|p| p.to_hash },
 			'player_bets' => {},
 			'available_moves' => available_moves,
-			'all_in' => @max_can_win.map {|p, mcw| {'player' => p.to_hash, 'pot' => mcw}}
+			'all_in' => @max_can_win.map {|p, mcw| {'player' => p.to_hash, 'pot' => mcw}},
+			'round_history' => @round_history,
+			'last_five_moves' => last_five_moves
 		}
 		@current_bets.each do |player, bet|
 			hsh['player_bets'][player.player_id] = bet
 		end
 		hsh
+	end
+
+	def last_five_moves
+		@hand_history.size > 5 ? @hand_history[-5,5] : @hand_history
 	end
 
 	def available_moves
@@ -365,6 +377,7 @@ class Table
 			when 3 then turn_or_river
 		end
 		@current_position = @button
+		@round_history = []
 		@players_at_start_of_hand = @hands.size - @max_can_win.size
 		@minimum_bet = big_blind
 		move_position(@phase == 0 ? 3 : 1) 
@@ -375,6 +388,7 @@ class Table
 	def new_hand
 		@board = []
 		@hands = {}
+		@hand_history = []
 		@pot = 0
 		@current_bets = {}
 		@current_bet = big_blind
@@ -412,22 +426,28 @@ class Table
 		@board << @deck.deal_card
 		clear_bets
 	end
-	
-	def fold(player)
-		ensure_acting_player(player)
-		@hands.delete(player)
-		@current_bets.delete(player)
-		move_position
-		@moves_taken += 1
-	end
 
 	#A helper method that wraps around if needed
 	def person_in_spot(pos)
 		pos % @seats.size
 	end
 
+	#Returns the position of the current player
+	def player_position(player)
+		@seats.include?(player) ? @seats.index(player) : false
+	end
+
 	def ensure_acting_player(player)
 		raise "#{player.name} is not the acting player" unless acting_player == player
+	end
+
+	def fold(player)
+		ensure_acting_player(player)
+		@hands.delete(player)
+		@current_bets.delete(player)
+		store_action('fold', player)
+		move_position
+		@moves_taken += 1
 	end
 
 	def check(player)
@@ -448,12 +468,28 @@ class Table
 			new_amount > @current_bet and new_amount < (@current_bet + @minimum_bet)
 		raise_amount = new_amount - @current_bet
 		@minimum_bet = raise_amount if raise_amount > @minimum_bet
+		is_raise = @current_bet != 0
 		@current_bet = new_amount
 		@current_bets[player] = new_amount
 		@pot += player.make_bet(amount)
 		check_side_pots(player, amount, current_player_bet)
 		move_position
+		if amount == 0
+			action_name = 'check'
+		elsif raise_amount == 0
+			action_name = 'call'
+		else
+			action_name = is_raise ? 'raise' : 'bet'
+		end
+		store_action(action_name, player, amount)
 		@moves_taken += 1
+	end
+
+	def store_action(action, player, bet_amount = 0)
+		hsh = {'action' => action, 'player' => player.player_id, 'pot' => @pot,
+			'bet_amount' => bet_amount, 'current_total_bet' => @current_bet}
+		@hand_history << hsh
+		@round_history << hsh
 	end
 
 	#Sees if we need to add any money into the side pots
@@ -489,6 +525,7 @@ class Table
 		@minimum_bet = raise_amount if raise_amount > @minimum_bet
 		@current_bet = all_in_amount if all_in_amount > @current_bet
 		check_side_pots(player, new_bet_amount, current_player_bet)
+		store_action('all-in', player, new_bet_amount)
 		move_position unless @max_can_win.size == @hands.size
 		@moves_taken += 1
 	end
@@ -512,13 +549,6 @@ class Table
 				top_hands[player] = hand
 				current_top = hand
 			else
-#				require 'pp'
-#				pp "Comparing:"
-#				pp current_top
-#				pp "and"
-#				pp hand
-#				pp "with board"
-#				pp @board
 				w = Hand.new(current_top, hand, @board).winner
 				if w == 2 #New winner
 					top_hands = {player => hand}
@@ -645,11 +675,6 @@ class Hand
 	def winner
 		best_for_1 = best_hand(@hand1)
 		best_for_2 = best_hand(@hand2)
-#		puts "Best hand for #{@hand1.inspect}:"
-#		pp best_for_1
-#		puts "Best hand for #{@hand2.inspect}:"
-#		pp best_for_2
-#		puts "\n\n\n\n"
 		case best_for_1[:rank] <=> best_for_2[:rank]
 			when -1 then 2
 			when 1 then 1

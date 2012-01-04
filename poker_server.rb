@@ -4,6 +4,8 @@ require 'rubygems'
 require 'poker.rb'
 require 'pp'
 require 'spire_io'
+require 'openssl'
+require 'openpgp'
 
 class PokerServer
 	attr_reader :discovery_url, :discovery_capability
@@ -71,28 +73,33 @@ class PokerServer
 			log 'Creating player with attributes:'
 			log command, true
 			return unless command.has_key?('name') and command.has_key?('id')
-			if @players.has_key?(command['name'])
-				log "Already have a player with the name #{command['name']}"
-				@registration_response.publish({'id' => command['id'], 'status' => 'Name taken'}.to_json)
-			else
-				@player_number += 1
-				p = Player.new(command['name'], @player_number)
-				channel = @spire["player_#{@player_number}"]
-				sub = channel.subscribe("sub_player_#{@player_number}")
-				sub.add_listener("player_action") {|m| process_player_action(p, m)}
-				sub.start_listening
-				player_response = @spire["player_response_#{@player_number}"]
-				pr_sub = player_response.subscribe("player_resp_sub_#{@player_number}")
-				@players[command['name']] = {:player => p, :id => @player_number,
-					:channel => channel, :subscription => sub, :response_channel => player_response,
-					:response_sub => pr_sub}
-				@registration_response.publish({'command_id' => command['id'],
-					'url' => channel.url, 'capability' => channel.capability,
-					'response_url' => pr_sub.url, 'player_id' => @player_number,
-					'response_capability' => pr_sub.capability}.to_json)
-			end
+			@player_number += 1
+			p = Player.new(command['name'], @player_number)
+			channel = @spire["player_#{@player_number}"]
+			sub = channel.subscribe("sub_player_#{@player_number}")
+			sub.add_listener("player_action") {|m| process_player_action(p, m)}
+			sub.start_listening
+			player_response = @spire["player_response_#{@player_number}"]
+			pr_sub = player_response.subscribe("player_resp_sub_#{@player_number}")
+			@players[@player_number] = {:player => p, :id => @player_number,
+				:channel => channel, :subscription => sub, :response_channel => player_response,
+				:response_sub => pr_sub}
+			resp_hash = {'command_id' => command['id'],
+				'url' => channel.url, 'capability' => channel.capability,
+				'response_url' => pr_sub.url, 'player_id' => @player_number,
+				'response_capability' => pr_sub.capability}
+			encrypt_capabilities(resp_hash, command['public_key']) if command['public_key']
+			@registration_response.publish(resp_hash.to_json)
 		end
 	end #def process_registration
+
+	def encrypt_capabilities(resp_hash, public_key)
+		public_key_encrypter = OpenSSL::PKey::RSA.new(public_key)
+		rc = public_key_encrypter.public_encrypt(resp_hash.delete('response_capability'))
+		resp_hash['encrypted_response_capability'] = OpenPGP.enarmor(rc)
+		c = public_key_encrypter.public_encrypt(resp_hash.delete('capability'))
+		resp_hash['encrypted_capability'] = OpenPGP.enarmor(c)
+	end
 
 	def process_create_table(message)
 		command = JSON.parse(message)
@@ -131,7 +138,7 @@ class PokerServer
 	def join_table(player, command)
 		@mutex.synchronize do
 			return false unless table_data = @tables[command['table_id']]
-			table_data[:game].join_table(player, @players[player.name][:response_channel])
+			table_data[:game].join_table(player, @players[player.player_id][:response_channel])
 			table_data[:game].check_start unless table_data[:game].started
 		end
 	end

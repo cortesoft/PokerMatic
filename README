@@ -1,5 +1,185 @@
-Using the Poker Client
+h1. PokerMatic
 
-* Install the spire.io.rb gem (https://github.com/spire-io/spire.io.rb)
-* Run the poker client program
-* ./human_client.rb
+PokerMatic consists of two parts; a server and a set of client libraries.  The server can be thought of
+as the virtual poker hall; it is in charge of setting up tables, giving chips to players, and dealing the cards.
+The client libraries can be thought of as the virtual poker players, playing at tables hosted by the server.
+
+h2. Setting up the dependencies
+
+Both the PokerServer and PokerBots require the same following dependencies:
+
+* Install the spire.io.rb gem
+** https://github.com/spire-io/spire.io.rb
+* Install OpenPGP
+** gem install openpgp
+
+h2. Setting up your config file
+
+Both the server and client libraries read their settings from a file *config.rb*.  Make a copy
+of *config_example.rb* and name it *config.rb*.
+
+To run a server, the only value that you need to set is *API_KEY*  This should be your spire.io
+API key.  (You can sign up for a spire.io account at http://www.spire.io/register.html)
+
+Once the poker server is started (by running ./poker_server.rb), a discovery url and capability will
+be displayed.  These are the two values clients will need in order to connect to the server.
+Set *DISCOVERY_URL* and *DISCOVERY_CAPABILITY* to the correct values in config.rb.  If you are connecting
+to a poker server running somewhere else, you need to get the url and capability from the server admin.
+
+h2. Running a poker server
+
+Once you have set your API_KEY in your config.rb file, starting up the poker server is as simple as
+running ./poker_server.rb.  Since all communication occurs through spire.io, there is no need to worry about
+DNS, IP addresses, or port forwarding.  The only thing clients will need are the two values URL and capability that
+are displayed when the server starts up.
+
+h2. Creating a client (bot)
+
+PokerMatic comes with a base class (PokerClientBase) that you can extend to create your own poker bots.
+Also included are two example clients, human_client.rb and random_client.rb.  HumanClient is just a CLI client
+that asks for each move; you can use it to actually play poker (albeit with a poor user interface).  RandomClient
+does exactly what it says; it makes random bets without considering the cards in its hand.
+
+When subclassing PokerClientBase, there is only one method that MUST be defined: ask_for_move, which receives
+a GameState object when it is called.  This function should return the move the client wants to take; valid moves are
+'fold', 'call', 'check', or an amount to bet. Note that all of these moves are not available at all times; you cannot check
+if a bet has already occurred, of course.  A list of available moves is accessible by calling #available_moves on the GameState
+object (this will be explained in more detail below).
+
+To connect your new client to a server, take a look at the example code at the bottom of the two reference clients.  You can
+either use the same code in your own client, or you can modify it to fit your case.
+
+h3. GameState
+
+The GameState object that is passed to ask_for_move contains all of the information about the current hand being played
+and all of the players at the table.  It includes both a ruby representation of the JSON object that the poker server
+sends after each play at the table, as well as the pocket cards that the client has.
+
+The information stored in a GameState object can be retrieved by either method call or hash.
+For example, to access the current hand number, both of these will work:
+
+game_state.hand_number
+game_state['hand_number']
+
+Here is a list of all available attributes that the GameState object contains:
+
+*hand*
+
+An array of the client's two pocket cards. For example:
+
+[{"name"=>5, "suit"=>"Club", "value"=>5, "string"=>"5 of Clubs"},
+   {"name"=>"King", "suit"=>"Heart", "value"=>13, "string"=>"King of Hearts"}]
+
+*hand_number*
+
+The current hand number.  Starts at 1, each hand delt at a table increases this by one.
+
+*button*
+
+The current position of the button (dealer) at the table.  Corresponds to the position in
+the 'players' array (0 indexed).
+
+*players*
+
+An array of hashes describing the players at the table.  For example:
+
+[{"name"=>"Daniel", "bankroll"=>506, "id"=>1804618},
+	{"name"=>"Rando", "bankroll"=>494, "id"=>1804619}]
+	
+*acting_seat*
+
+The index of the currently acting player in the players array.
+
+*last_five_moves*
+
+An array of (up to) the last 5 moves of the hand.  The most recent action is the last in the array.
+For example:
+
+[
+	{"player"=>1804618, "action"=>"raise", "bet_amount"=>3, "current_total_bet"=>4, "pot"=>6},
+  {"player"=>1804619, "action"=>"raise", "bet_amount"=>4, "current_total_bet"=>6, "pot"=>10},
+  {"player"=>1804618, "action"=>"call", "bet_amount"=>2, "current_total_bet"=>6, "pot"=>12}
+]
+
+*current_bet*
+
+The total of the current bet.  This is the per player bet, not the total for the round.
+
+*minimum_bet*
+
+The minimum bet a player can make.
+
+*player_bets*
+
+A hash of all the total bet each player has made in the current round, indexed by a string version
+of the player id.  For example:
+
+{"1804618"=> 6, "1804619" => 8}
+
+*available_moves*
+
+A hash of all the available moves a player has given the current state of the board and the players
+bankroll.  The key is the name of the move and the value is the cost to the player to take that move.  For example:
+
+{"fold"=>0, "bet"=>2, "all_in"=>494, "check"=>0}
+
+The value for bet is the MINIMUM bet, but the bet can be anywhere between this value and the all_in value.
+
+*round_history*
+
+A complete history of the betting in the current round (pre-flop, flop, etc) in the same format as last_five_moves.  The most recent
+action is last.
+
+*phase_name*
+
+Name of the current phase.  Possible values are 'New Hand', 'Pre-Flop', 'Flop', 'Turn', 'River'
+
+*phase*
+
+A numeric representation of the current phase.  Values are:
+
+0 - New Hand
+1 - Pre-Flop
+2 - Flop
+3 - Turn
+4 - River
+
+*players_waiting_to_join*
+
+A list of all players who wish to join the table.  If a player has money in their bankroll,
+they will join the game at the start of the next hand.  This is also where players are placed after running
+out of money.
+
+*all_in*
+
+An array of any players who are all in for the hand.  Each element of the array is a hash describing the player as
+well as the size of the pot they are eligible for (due to side pots). For example:
+
+[
+	{"player"=>{"name"=>"Rando", "bankroll"=>0, "id"=>1804619}, "pot"=>600},
+  {"player"=>{"name"=>"Daniel", "bankroll"=>0, "id"=>1804618}, "pot"=>1000}
+]
+
+*board*
+
+An array describing the community cards.  Depending on the phase of the game, this will be either 0,3,4 or 5 cards.  For example:
+
+[
+	{"name"=>5, "suit"=>"Spade", "value"=>5, "string"=>"5 of Spades"},
+  {"name"=>"King", "suit"=>"Spade", "value"=>13, "string"=>"King of Spades"},
+  {"name"=>"Jack", "suit"=>"Diamond", "value"=>11, "string"=>"Jack of Diamonds"}
+]
+
+*pot*
+
+The current size of the pot
+
+*players_in_hand*
+
+An array of the ids of players who are still in the hand (not folded).
+
+*acting_player*
+
+A hash describing the acting player. For example:
+
+{"name"=>"Daniel", "bankroll"=>494, "id"=>1804618}

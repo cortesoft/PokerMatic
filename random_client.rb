@@ -37,6 +37,7 @@ class RandomClient < PokerClientBase
 			current_bet = max_bet if current_bet > max_bet
 			move = current_bet
 		end
+		move = 'fold' if move == 0 and !weights['check']
 		move
 	end
 
@@ -48,23 +49,6 @@ class RandomClient < PokerClientBase
 			curr_tot += value
 			return key if rval < curr_tot
 		end
-	end
-
-	def join_table
-		raise "No player yet!" unless @player_id
-		#get all the possible tables
-		tc = new_sub(@discovery['tables']['url'], @discovery['tables']['capability'])
-		all_tables = tc.listen.map {|x| JSON.parse(x) rescue nil}.compact
-		hsh_map = {}
-		num = 0
-		all_tables.each do |table|
-			num += 1
-			hsh_map[num] = table
-			puts "Table #{num}: #{table['name']} Blinds #{table['blinds']} Min Players #{table['min_players']}"
-		end
-		puts "Join which table?"
-		tnum = gets.chomp.to_i
-		join_specific_table(hsh_map[tnum])
 	end
 end
 
