@@ -1,6 +1,7 @@
 module PokerMatic
 require 'set'
 
+#A class for running a network based game
 class NetworkGame
 	attr_accessor :started
 
@@ -147,6 +148,7 @@ class NetworkGame
 	end
 end
 
+#A class for running a quick console game with 4 players
 class QuickGame
 	attr_reader :table
 	def initialize(blinds = 1)
@@ -549,7 +551,7 @@ class Table
 				top_hands[player] = hand
 				current_top = hand
 			else
-				w = Hand.new(current_top, hand, @board).winner
+				w = HandComparison.new(current_top, hand, @board).winner
 				if w == 2 #New winner
 					top_hands = {player => hand}
 					current_top = hand
@@ -664,7 +666,7 @@ class Card
 end #class Card
 
 #Takes care of figuring out the winner
-class Hand
+class HandComparison
 	def initialize(hand1, hand2, board)
 		@hand1 = hand1
 		@hand2 = hand2
@@ -849,6 +851,6 @@ class Hand
 		ret = (hand + @board).sort_by {|x| x.sort_value}.reverse[0,5]
 		{:rank => 0, :hand => ret, :kicker => ret}
 	end
-end #class Hand
+end #class HandComparison
 
 end #module PokerMatic

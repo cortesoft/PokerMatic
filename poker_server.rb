@@ -13,6 +13,19 @@ class PokerServer
 	include PokerMatic
 	
 	def initialize
+		create_spire
+		#Trying to avoid collisions
+		@player_number = Time.now.to_i - 1323827358
+		@table_number = Time.now.to_i - 1323828358
+		@mutex = Mutex.new
+		@log_mutex = Mutex.new
+		@tables = {}
+		@players = {}
+		@table_names = []
+		create_channels
+	end
+
+	def create_spire
 		@spire = Spire.new
 		if !API_KEY
 			puts "API key?"
@@ -21,18 +34,14 @@ class PokerServer
 			api_key = API_KEY
 		end
 		@spire.start(api_key)
-		@player_number = Time.now.to_i - 1323827358
-		@table_number = Time.now.to_i - 1323828358
-		@mutex = Mutex.new
-		@log_mutex = Mutex.new
-		@tables = {}
+	end
+
+	def create_channels
 		@discovery = @spire['discovery']
 		@tables_channel = @spire["tables_#{@player_number}"]
 		@registration = @spire['registration']
 		@registration_response = @spire["registration_response_#{@player_number}"]
 		@create_table_channel = @spire['create_table']
-		@players = {}
-		@table_names = []
 		payload = {}
 		[['tables', @tables_channel.subscribe("table_sub")],
 		['registration', @registration],
@@ -46,16 +55,6 @@ class PokerServer
 		@discovery_url = @dsub.url
 		@discovery_capability = @dsub.capability
 	end
-	
-	def log(m, use_pp = false)
-		@log_mutex.synchronize do
-			if use_pp
-				pp m
-			else
-				puts "#{Time.now}: #{m}"
-			end
-		end
-	end
 
 	def setup_listeners
 		@registration_sub = @registration.subscribe("reg_sub")
@@ -66,7 +65,15 @@ class PokerServer
 		@create_table_sub.add_listener('create_table') {|m| process_create_table(m)}
 		@create_table_sub.start_listening
 	end
-	
+
+	#Thread safe logging to standard out
+	def log(m, use_pp = false)
+		@log_mutex.synchronize do
+			use_pp ? pp(m) : puts("#{Time.now}: #{m}")
+		end
+	end
+
+	#Process a request to register a user from the registration channel
 	def process_registration(message)
 		command = JSON.parse(message)
 		@mutex.synchronize do
@@ -93,6 +100,7 @@ class PokerServer
 		end
 	end #def process_registration
 
+	#Encrypts the capabilities before sending them out, to ensure privacy
 	def encrypt_capabilities(resp_hash, public_key)
 		public_key_encrypter = OpenSSL::PKey::RSA.new(public_key)
 		rc = public_key_encrypter.public_encrypt(resp_hash.delete('response_capability'))
@@ -101,6 +109,7 @@ class PokerServer
 		resp_hash['encrypted_capability'] = OpenPGP.enarmor(c)
 	end
 
+	#Process a create table request from the tables channel
 	def process_create_table(message)
 		command = JSON.parse(message)
 		log 'Creating table with attributes:'
@@ -124,7 +133,8 @@ class PokerServer
 				'url' => channel_sub.url, 'capability' => channel_sub.capability}.to_json)
 		end
 	end
-	
+
+	#Process a request from a player channel
 	def process_player_action(player, message)
 		command = JSON.parse(message)
 		log "Processing player action for #{player.name}"
@@ -134,7 +144,7 @@ class PokerServer
 			when 'action' then take_table_action(player, command)
 		end
 	end
-	
+
 	def join_table(player, command)
 		@mutex.synchronize do
 			return false unless table_data = @tables[command['table_id']]
