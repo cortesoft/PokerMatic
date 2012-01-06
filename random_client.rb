@@ -10,10 +10,9 @@ class RandomClient < PokerClientBase
 		super
 	end
 
-	def winner_update(data)
-	end
-
 	def ask_for_move(game_state)
+		puts "Move for #{self.name}"
+		game_state.hand.each {|h| puts h['string']}
 		weights = {}
 		game_state.available_moves.sort.reverse.each do |key, value|
 			weights[key] = case key

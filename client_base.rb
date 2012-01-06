@@ -14,7 +14,7 @@ end
 #is a representation of the current state of the game
 #NOTE: Make sure to call super on your subclass's initialize method
 class PokerClientBase
-	attr_accessor :player_id, :mutex
+	attr_accessor :player_id, :mutex, :name
 
 	def initialize(discovery_url = nil, discovery_capability = nil)
 		@mutex = Mutex.new
@@ -42,44 +42,6 @@ class PokerClientBase
 			puts "Discovery capability?"
 			gets.chomp
 		end
-	end
-
-	#Called whenever there is an update for the player, either an error or hand information
-	#Stores the hand data for late reference
-	def player_update(data)
-		if data['type'] == 'hand'
-			@mutex.synchronize do
-				@hand_hash[data['hand_number']] = data['hand']
-				@seat_number = data['seat_number']
-				@bankroll = data['player']['bankroll']
-				if @game_state_hash[data['hand_number']]
-					@game_state_hash[data['hand_number']].set_hand(data['hand'])
-				end
-			end
-		elsif data['type'] == 'error'
-			invalid_move(data)
-		end
-	end
-
-	#Called when the client makes an invalid move
-	#Can be overridden by subclasses to handle errors
-	def invalid_move(data)
-		@mutex.synchronize do
-			puts "Invalid move: #{data['message']}"
-		end
-	end
-
-	#Waits to get the client's hole cards before returning
-	#This is necessary because of the asynchronous nature of the poker server
-	#Called before asking for a move
-	def wait_for_hand_data(hand_number)
-		20.times do
-			@mutex.synchronize do
-				return true if @hand_hash[hand_number]
-			end
-			sleep 2
-		end
-		false
 	end
 
 	#Registers a user with the given name and waits for the server to respond with the created user
@@ -136,11 +98,8 @@ class PokerClientBase
 		@hand_hash = {}
 		@game_state_hash = {}
 		@active_table_number = data['id']
-		@active_table_sub = new_sub(data['url'], data['capability'])
 		@active_table_name = data['name']
-		@active_table_sub.add_listener('active_table_sub') {|m| table_update_proxy(m)}
-		@player_updates.add_listener('player_update') {|m| player_update_proxy(m)}
-		@active_table_sub.start_listening
+		@player_updates.add_listener('player_update') {|m| table_update_proxy(m)}
 		@player_updates.start_listening
 		@player_channel.publish({'table_id' => @active_table_number, 'command' => 'join_table'}.to_json)
 	end
@@ -152,6 +111,8 @@ class PokerClientBase
 			game_state_update(parsed)
 		elsif parsed['type'] == 'winner'
 			winner_update(parsed)
+		elsif parsed['type'] == 'error'
+			invalid_move(parsed)
 		end
 	end
 
@@ -160,15 +121,13 @@ class PokerClientBase
 	#and calls ask_for_move if it is the clients turn
 	#Also calls display_game_state if the client has defined it
 	def game_state_update(parsed_state)
-		hand = nil
 		game_state = nil
 		@mutex.synchronize do
-			hand = @hand_hash[parsed_state['hand_number']]
-			game_state = GameState.new(parsed_state, @player_id, hand)
+			@hand_hash[parsed_state['hand_number']] = parsed_state['hand']
+			@seat_number = parsed_state['seat_number']
+			@bankroll = parsed_state['player']['bankroll']
+			game_state = GameState.new(parsed_state, @player_id, parsed_state['hand'])
 			@game_state_hash[parsed_state['hand_number']] = game_state
-		end
-		if game_state.in_this_hand?
-			return false unless wait_for_hand_data(game_state['hand_number'])
 		end
 		@mutex.synchronize do
 			self.display_game_state(game_state) if self.respond_to?(:display_game_state)
@@ -180,9 +139,16 @@ class PokerClientBase
 		end
 	end
 
-	#Proxies player updates to the correct handler
-	def player_update_proxy(m)
-		player_update(JSON.parse(m))
+	#Called when the client makes an invalid move
+	#Can be overridden by subclasses to handle errors
+	def invalid_move(data)
+		@mutex.synchronize do
+			puts "Invalid move: #{data['message']}"
+		end
+	end
+
+	def winner_update(parsed)
+		#Should be defined by parent class
 	end
 
 	#Callback for a table being created.. joins the table if we created it

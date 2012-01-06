@@ -5,9 +5,8 @@ require 'set'
 class NetworkGame
 	attr_accessor :started
 
-	def initialize(server, table_channel, table, min_players = 2, log_mutex = nil)
+	def initialize(server, table, min_players = 2, log_mutex = nil)
 		@server = server
-		@table_channel = table_channel
 		@table = table
 		@log_mutex = log_mutex || Mutex.new
 		@started = false
@@ -47,24 +46,20 @@ class NetworkGame
 		add_players_from_queue
 		@hand_number += 1
 		@table.deal
-		send_player_hands
 		send_game_state
 	end
 
-	def send_player_hands
-		@channel_hash.each do |player, channel|
-			next if @table.queue.include?(player)
-			next unless @table.hands[player]
-			hand = @table.hands[player].map {|x| x.to_hash}
-			channel.publish({'type' => 'hand', 'hand_number' => @hand_number,
-				'table_id' => @table_id, 'hand' => hand, 'seat_number' => @table.player_position(player),
-				'player' => player.to_hash}.to_json)
-		end
-	end
-
 	def send_game_state(no_active = false)
-		@table_channel.publish({'hand_number' => @hand_number, 'table_id' => @table_id,
-			'state' => @table.table_state_hash(no_active), 'type' => 'game_state'}.to_json)
+		base_hash = {'hand_number' => @hand_number, 'table_id' => @table_id,
+			'state' => @table.table_state_hash(no_active), 'type' => 'game_state'}
+		@channel_hash.each do |player, channel|
+			player_hash = {}
+			if !@table.queue.include?(player) and @table.hands[player]
+				hand = @table.hands[player].map {|x| x.to_hash}
+				player_hash = {'hand' => hand, 'seat_number' => @table.player_position(player), 'player' => player.to_hash}
+			end
+			channel.publish(base_hash.merge(player_hash).to_json)
+		end
 	end
 
 	def send_winner(winner_hash, hands)
@@ -77,7 +72,9 @@ class NetworkGame
 				hsh['shown_hands'][player.name] = hand.map {|x| x.to_hash}
 			end
 		end
-		@table_channel.publish(hsh.to_json)
+		@channel_hash.each do |player, channel|
+			channel.publish(hsh.to_json)
+		end
 	end
 
 	def check_start

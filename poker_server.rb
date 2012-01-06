@@ -121,16 +121,12 @@ class PokerServer
 			min_players = (command['min_players'] || 2).to_i
 			blinds = (command['blinds'] || 1).to_i
 			@table_number += 1
-			table_channel = @spire["table_#{@table_number}"]
-			channel_sub = table_channel.subscribe("table_sub_#{@table_number}")
 			table = Table.new(blinds, @table_number)
-			game = NetworkGame.new(self, table_channel, table, min_players, @log_mutex)
-			@tables[@table_number] = {:table => table, :channel => table_channel,
-				:channel_sub => channel_sub, :min_players => min_players,
+			game = NetworkGame.new(self, table, min_players, @log_mutex)
+			@tables[@table_number] = {:table => table, :min_players => min_players,
 				:game => game, :name => command['name']}
 			@tables_channel.publish({'command_id' => command['id'], 'name' => command['name'],
-				'id' => @table_number, 'min_players' => min_players, 'blinds' => blinds,
-				'url' => channel_sub.url, 'capability' => channel_sub.capability}.to_json)
+				'id' => @table_number, 'min_players' => min_players, 'blinds' => blinds}.to_json)
 		end
 	end
 
