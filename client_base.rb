@@ -223,6 +223,10 @@ class PokerClientBase
 	#Uses gets, so requires CLI input
 	def join_table
 		raise "No player yet!" unless @player_id
+		join_specific_table(ask_to_choose_table)
+	end
+
+	def ask_to_choose_table
 		#get all the possible tables
 		all_tables = get_all_tables
 		hsh_map = {}
@@ -234,7 +238,7 @@ class PokerClientBase
 		end
 		puts "Join which table?"
 		tnum = gets.chomp.to_i
-		join_specific_table(hsh_map[tnum])
+		hsh_map[tnum]
 	end
 
 	def new_sub(url, capability)
@@ -290,12 +294,33 @@ class PokerClientBase
 		
 		# returns true if the client is in the hand
 		def in_this_hand?
-			@_ith ||= @state_hash['state']['players'].any? {|p| p['id'] == @player_id}
+			@state_hash['state']['players'].any? {|p| p['id'] == @player_id}
 		end
-		
+
+		def still_in_hand?(player_id)
+			@state_hash['state']['players_in_hand'].include?(player_id.to_i)
+		end
+
 		# returns true if it is the clients turn to act
 		def is_acting_player?
 			@_iap ||= @state_hash['state']['acting_player']['id'] == @player_id
+		end
+		
+		def number_of_players_in_hand
+			@_npih ||= @state_hash['state']['players_in_hand'].size
+		end
+		
+		#Returns the position of the acting player compared to the button (0 is button, 1 is the spot before the button)
+		def position
+			return 0 if self.button == self.acting_seat
+			spots = 1
+			current_spot = self.acting_seat - 1
+			self.number_of_players_in_hand.size.times do
+				current_spot = @state_hash['state']['players'].size - 1 if current_spot < 0
+				return spots if current_spot == self.acting_seat
+				spots += 1 if still_in_hand?(@state_hash['state']['players'][current_spot]['id'])
+				current_spot -= 1
+			end
 		end
 	end #class GameState
 end #Class PokerClientBase

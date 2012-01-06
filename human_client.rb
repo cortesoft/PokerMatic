@@ -10,9 +10,9 @@ class HumanClient < PokerClientBase
 	end
 
 	def display_game_state(game_state)
-		puts "\n\n\n"
-		pp game_state
-		puts "\n\n\n"
+		#puts "\n\n\n"
+		#pp game_state
+		#puts "\n\n\n"
 		print "\n\n\n\n"
 		print_state(game_state)
 		puts "\n\n\n"

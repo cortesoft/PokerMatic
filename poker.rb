@@ -85,6 +85,7 @@ class NetworkGame
 			if !@started and @table.seats.size >= @min_players
 				log "Starting game at table #{@table.table_id} with #{@table.seats.size} players"
 				@table.randomize_button
+				@table.randomize_seats
 				@started = true
 				start_hand
 			end
@@ -347,6 +348,10 @@ class Table
 
 	def randomize_button
 		@button = rand(@seats.size)
+	end
+
+	def randomize_seats
+		@seats = @seats.shuffle
 	end
 
 	def acting_player
@@ -643,6 +648,14 @@ class Card
 		13 => "King"
 	}
 
+	def self.create(hsh_or_array)
+		if hsh_or_array.is_a?(Array)
+			hsh_or_array.map {|x| self.create(x)}
+		else
+			self.new(hsh_or_array['suit'], hsh_or_array['value'])
+		end
+	end
+
 	def initialize(suit, value)
 		@suit = suit
 		@value = value
@@ -667,7 +680,7 @@ end #class Card
 
 #Takes care of figuring out the winner
 class HandComparison
-	def initialize(hand1, hand2, board)
+	def initialize(hand1 = nil, hand2 = nil, board = nil)
 		@hand1 = hand1
 		@hand2 = hand2
 		@board = board
