@@ -47,6 +47,7 @@ class PokerClientBase
 	#Registers a user with the given name and waits for the server to respond with the created user
 	def create_user(name)
 		@mutex.synchronize do
+			@name = name
 			@reg_response = new_sub(@discovery['registration_response']['url'],
 				@discovery['registration_response']['capability'])
 			@command_id = rand(99999999)
@@ -62,6 +63,10 @@ class PokerClientBase
 			end
 			@create_player_channel.publish(hsh.to_json)
 		end
+		wait_for_player_to_be_created
+	end
+
+	def wait_for_player_to_be_created
 		while true
 			should_exit = false
 			@mutex.synchronize do
@@ -70,6 +75,7 @@ class PokerClientBase
 			break if should_exit
 			sleep 1
 		end
+		@reg_response.stop_listening if @reg_response
 	end
 
 	#Callback for whenever a user is created.  If the created user was created by this client,
@@ -154,7 +160,7 @@ class PokerClientBase
 	#Callback for a table being created.. joins the table if we created it
 	def my_table_created(m)
 		resp = JSON.parse(m)
-		if resp['command_id'] == @table_command_id
+		if resp['command_id'] == @player_id
 			join_specific_table(resp)
 		end
 	end
@@ -165,8 +171,6 @@ class PokerClientBase
 	# @param [String] blinds Starting small blind for the table
 	def create_table(name, min_players = 2, blinds = 1)
 		raise "No player yet!" unless @player_id
-		@reg_response.stop_listening if @reg_response
-		@table_command_id = rand(99999999)
 		@table_response = new_sub(@discovery['tables']['url'],
 				@discovery['tables']['capability'])
 		@create_table_channel = new_channel(@discovery['create_table']['url'],
@@ -174,7 +178,7 @@ class PokerClientBase
 		@table_response.last = (Time.now.to_i * 1000) - 5
 		@table_response.add_listener('table_response') {|m| my_table_created(m)}
 		@table_response.start_listening
-		@create_table_channel.publish({'name' => name, 'id' => @table_command_id,
+		@create_table_channel.publish({'name' => name, 'id' => @player_id,
 			'min_players' => min_players, 'blinds' => blinds}.to_json)
 	end
 

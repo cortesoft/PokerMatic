@@ -53,10 +53,10 @@ class NetworkGame
 		base_hash = {'hand_number' => @hand_number, 'table_id' => @table_id,
 			'state' => @table.table_state_hash(no_active), 'type' => 'game_state'}
 		@channel_hash.each do |player, channel|
-			player_hash = {}
+			player_hash = {'player' => player.to_hash}
 			if !@table.queue.include?(player) and @table.hands[player]
 				hand = @table.hands[player].map {|x| x.to_hash}
-				player_hash = {'hand' => hand, 'seat_number' => @table.player_position(player), 'player' => player.to_hash}
+				player_hash.merge!({'hand' => hand, 'seat_number' => @table.player_position(player)})
 			end
 			channel.publish(base_hash.merge(player_hash).to_json)
 		end
