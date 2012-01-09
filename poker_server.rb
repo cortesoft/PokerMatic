@@ -122,7 +122,7 @@ class PokerServer
 			blinds = (command['blinds'] || 1).to_i
 			@table_number += 1
 			table = Table.new(blinds, @table_number)
-			game = NetworkGame.new(self, table, min_players, @log_mutex)
+			game = NetworkGame.new(table, min_players, @log_mutex)
 			@tables[@table_number] = {:table => table, :min_players => min_players,
 				:game => game, :name => command['name']}
 			@tables_channel.publish({'command_id' => command['id'], 'name' => command['name'],

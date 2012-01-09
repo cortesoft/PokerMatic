@@ -5,15 +5,17 @@ require 'set'
 class NetworkGame
 	attr_accessor :started
 
-	def initialize(server, table, min_players = 2, log_mutex = nil)
-		@server = server
+	def initialize(table, min_players = 2, log_mutex = nil, timelimit = 30)
 		@table = table
+		@timelimit = timelimit
+		@table.timelimit = @timelimit
 		@log_mutex = log_mutex || Mutex.new
 		@started = false
 		@mutex = Mutex.new
 		@min_players = min_players
 		@channel_hash = {}
 		@hand_number = 0
+		@move_number = 0
 	end
 	
 	def log(m, use_pp = false)
@@ -46,6 +48,7 @@ class NetworkGame
 		add_players_from_queue
 		@hand_number += 1
 		@table.deal
+		start_timer
 		send_game_state
 	end
 
@@ -88,27 +91,50 @@ class NetworkGame
 			end
 		end
 	end
-	
+
+	def start_timer
+		@move_number += 1
+		Thread.new(@move_number, @table.acting_player) {|move_num, acting_player|
+			sleep @timelimit
+			should_force_move = false
+			@mutex.synchronize do
+				should_force_move = (@move_number == move_num) and (acting_player == @table.acting_player)
+			end
+			if should_force_move
+				puts "Reached timelimit for player #{acting_player.name}... folding"
+				take_action(acting_player, 'fold')
+			end
+		}
+	end
+
 	def take_action(player, action)
 		raise "Hand is not started" unless @started
-		if action == 'fold'
-			log "Folding for #{player.name}"
-			@table.fold(player)
-		elsif action == 'check'
-			puts "Checking for #{player.name}"
-			@table.check(player)
-		elsif action == 'call'
-			@table.call(player)
-		elsif action == 'all_in'
-			@table.bet(player, player.bankroll)
-		else
-			puts "Betting #{action} for #{player.name}"
-			@table.bet(player, action.to_i)
+		@mutex.synchronize do
+			if action == 'fold'
+				log "Folding for #{player.name}"
+				@table.fold(player)
+			elsif action == 'check'
+				puts "Checking for #{player.name}"
+				@table.check(player)
+			elsif action == 'call'
+				@table.call(player)
+			elsif action == 'all_in'
+				@table.bet(player, player.bankroll)
+			else
+				puts "Betting #{action} for #{player.name}"
+				@table.bet(player, action.to_i)
+			end
 		end
-		@table.betting_complete? ? next_round : send_game_state
+		if @table.betting_complete?
+			next_round
+		else
+			start_timer
+			send_game_state
+		end
 	rescue
 		log "Rescued action error #{$!.inspect}"
 		log $!.backtrace.join("\n")
+		start_timer
 		@channel_hash[player].publish({'type' => 'error', 'hand_number' => @hand_number,
 			'table_id' => @table_id, 'message' => $!.message}.to_json)
 		sleep 2
@@ -117,30 +143,39 @@ class NetworkGame
 	
 	def next_round
 		if @table.hand_over?
-			log "#### HAND OVER #####"
-			log "Board is \n\n#{@table.board_string}\n\n"
-			log "Hands still in:\n\n"
-			@table.hands.each do |player, hand|
-				log "#{player.name}: #{hand.join(", ")}"
-			end
-			log "\n\n"
-			log "#################"
-			hands = @table.hands.dup
-			winner_hash = @table.showdown
-			send_winner(winner_hash, hands)
-			@table.remove_busted_players
-			if @table.seats.size > 1
-				start_hand
-			else
-				@started = false
+			@mutex.synchronize do
+				log "#### HAND OVER #####"
+				log "Board is \n\n#{@table.board_string}\n\n"
+				log "Hands still in:\n\n"
+				@table.hands.each do |player, hand|
+					log "#{player.name}: #{hand.join(", ")}"
+				end
+				log "\n\n"
+				log "#################"
+				hands = @table.hands.dup
+				winner_hash = @table.showdown
+				send_winner(winner_hash, hands)
+				@table.remove_busted_players
+				if @table.seats.size > 1
+					start_hand
+				else
+					@started = false
+				end
 			end
 		else
-			@table.deal
+			@mutex.synchronize do
+				@table.deal
+			end
 			if @table.betting_complete?
-				send_game_state(true)
+				@mutex.synchronize do
+					send_game_state(true)
+				end
 				next_round
 			else
-				send_game_state
+				start_timer
+				@mutex.synchronize do
+					send_game_state
+				end
 			end
 		end
 	end
@@ -235,6 +270,7 @@ end #class Player
 class Table
 	attr_reader :board, :button, :phase, :small_blind, :seats, :pot, :current_bet,
 		:minimum_bet, :current_bets, :hands, :table_id, :queue
+	attr_accessor :timelimit
 
 	PHASES = ['New Hand', 'Pre-Flop', 'Flop', 'Turn', 'River']
 	def initialize(small_blind = 1, table_id = nil)
@@ -245,6 +281,7 @@ class Table
 		@hands = {}
 		@board = []
 		@phase = 0
+		@timelimit = 30
 		@small_blind = small_blind
 		@table_id = table_id
 	end
@@ -288,7 +325,8 @@ class Table
 			'available_moves' => available_moves,
 			'all_in' => @max_can_win.map {|p, mcw| {'player' => p.to_hash, 'pot' => mcw}},
 			'round_history' => @round_history,
-			'last_five_moves' => last_five_moves
+			'last_five_moves' => last_five_moves,
+			'timelimit' => @timelimit
 		}
 		@current_bets.each do |player, bet|
 			hsh['player_bets'][player.player_id] = bet

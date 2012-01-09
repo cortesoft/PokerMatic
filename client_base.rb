@@ -1,4 +1,5 @@
 require 'config.rb' if File.exists?('config.rb')
+require 'timeout'
 if !defined?(USE_ENCRYPTION) or USE_ENCRYPTION
 	require 'rubygems'
 	require 'openpgp'
@@ -137,10 +138,16 @@ class PokerClientBase
 		end
 		@mutex.synchronize do
 			self.display_game_state(game_state) if self.respond_to?(:display_game_state)
-			if game_state.is_acting_player?
-				move = ask_for_move(game_state)
-				@player_channel.publish({'table_id' => @active_table_number,
-					'command' => 'action', 'action' => move}.to_json)
+			if game_state.is_acting_player? and game_state.hand
+				begin
+					Timeout.timeout(game_state.timelimit) do
+						move = ask_for_move(game_state)
+						@player_channel.publish({'table_id' => @active_table_number,
+						'command' => 'action', 'action' => move}.to_json)
+					end
+				rescue Timeout::Error
+					puts "Took too long to make a move, folding"
+				end
 			end
 		end
 	end

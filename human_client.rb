@@ -16,7 +16,7 @@ class HumanClient < PokerClientBase
 		print "\n\n\n\n"
 		print_state(game_state)
 		puts "\n\n\n"
-		if game_state.in_this_hand?
+		if game_state.in_this_hand? and game_state.hand
 			puts "Your hole cards are:"
 			puts "| #{game_state.hand.map {|x| x['string']}.join(" | ")} |"
 		else
