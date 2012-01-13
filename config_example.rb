@@ -7,3 +7,7 @@ USE_ENCRYPTION = true
 
 #### Server Configs ####
 API_KEY = "YOUR SPIRE IO API KEY"
+
+### Admin Configs ###
+ADMIN_URL = "Admin Url"
+ADMIN_CAPABILITY = "Admin capability"

@@ -1,7 +1,6 @@
 #!/usr/bin/env ruby
 require 'rubygems'
 require 'pp'
-require 'spire_io'
 require 'client_base'
 
 class HumanClient < PokerClientBase
@@ -125,13 +124,18 @@ if $PROGRAM_NAME == __FILE__
 	puts "User name?"
 	name = gets.chomp
 	client.create_user(name)
-	puts "Join a room or create a new one? 'join' or name of room"
-	if 'join' == (choice = gets.chomp)
-		client.join_table
+	puts "Tournament or table? (1 = tournament, 2 = table)"
+	if gets.chomp.to_i == 1
+		client.join_tournament
 	else
-		puts "Number of players at the table?"
-		num = gets.chomp.to_i
-		client.create_table(choice, num)
+		puts "Join a room or create a new one? 'join' or name of room"
+		if 'join' == (choice = gets.chomp)
+			client.join_table
+		else
+			puts "Number of players at the table?"
+			num = gets.chomp.to_i
+			client.create_table(choice, num)
+		end
 	end
 	while true
 		sleep 1000

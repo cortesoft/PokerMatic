@@ -1,23 +1,47 @@
 module PokerMatic
 require 'set'
 
-#A class for running a network based game
-class NetworkGame
-	attr_accessor :started
+class Tournament
+	attr_reader :start_time
+	# :start_time, :log_mutex, :time_limit, :small_blind, :blind_timer, :start_chips
+	# :tourney_id, :name, :server
 
-	def initialize(table, min_players = 2, log_mutex = nil, timelimit = 30)
-		@table = table
-		@timelimit = timelimit
-		@table.timelimit = @timelimit
-		@log_mutex = log_mutex || Mutex.new
-		@started = false
+	def initialize(opts = {})
+		@server = opts[:server]
+		@start_time = opts[:start_time] || Time.now + 600
+		@log_mutex = opts[:log_mutex] || Mutex.new
+		@tourney_id = opts[:tourney_id] || rand(9999999)
+		@timelimit = opts[:time_limit] || 30
+		@small_blind = opts[:small_blind] || 1
+		@blind_timer = opts[:blind_timer] || 300
+		@start_chips = opts[:start_chips] || 1000
+		@name = opts[:name] || "Tourney #{@tourney_id}"
+		@players = []
+		@tables = []
+		@table_player_counts = {}
 		@mutex = Mutex.new
-		@min_players = min_players
+		@started = false
 		@channel_hash = {}
-		@hand_number = 0
-		@move_number = 0
+		@finish_order = []
+		start_timer unless opts[:no_timer]
 	end
 	
+	def start_timer
+		@timer = Thread.new {
+			sleep(@start_time - Time.now)
+			start_tournament
+		}
+	end
+
+	def join_tournament(player, channel)
+		@mutex.synchronize do
+			if !@started
+				@channel_hash[player] = channel
+				@players << player
+			end
+		end
+	end
+
 	def log(m, use_pp = false)
 		@log_mutex.synchronize do
 			if use_pp
@@ -26,6 +50,229 @@ class NetworkGame
 				puts "#{Time.now}: #{m}"
 			end
 		end
+	end
+
+	def hand_finished(table)
+		should_start_hand = false
+		@mutex.synchronize do
+			table.add_players_from_queue
+			remove_busted_players(table.table)
+			rebalance_tables(table)
+			#If we still have a table to start
+			check_for_winner
+			if @table_player_counts[table]
+				set_blind_levels(table)
+				should_start_hand = table.seats.size > 1
+			end
+		end
+		if should_start_hand
+			log "Starting hand for #{table.table.table_id}"
+			table.start_hand
+		else
+			log "Not starting another hand because table is empty"
+		end
+	end
+
+	def check_for_winner
+		if @players.size - @finish_order.size <= 1
+			log "We have a winner for the tournament #{@name}!"
+			winner = (@players - @finish_order).first
+			log "Winner: #{winner.name}!"
+			place = 2
+			@finish_order.reverse.each do |p|
+				log "#{place}. #{p.name}"
+				place += 1
+			end
+		end
+	end
+
+	def current_small_blind
+		elapsed = (Time.now - @start_time).to_i
+		num_levels = (elapsed / @blind_timer) + 1
+		sb = @small_blind * (2 ** num_levels)
+		log "#{elapsed} seconds have gone by, so the level is #{num_levels}, blind timer is #{@blind_timer} with blind is now at #{sb}"
+		sb
+	end
+
+	def set_blind_levels(table)
+		table.table.small_blind = current_small_blind
+	end
+
+	def rebalance_tables(table)
+		@table_player_counts[table] = table.seats.size
+		return true if close_table_if_possible(table)
+		@table_player_counts.each do |other_table, num_players|
+			next if other_table == table
+			if table.seats.size > num_players + 1
+				num_to_move = table.seats.size - (num_players + 1)
+				num_to_move.times do
+					player_to_move = table.table.player_in_position(table.table.button + 3)
+					other_table.join_table(player_to_move, @channel_hash[player_to_move])
+					table.table.seats.delete(player_to_move)
+					@table_player_counts[table] -= 1
+					@table_player_counts[other_table] += 1
+				end
+			end
+		end
+	end
+
+	def close_table_if_possible(table)
+		available_seats = 0
+		@table_player_counts.each {|other_table, n| next if other_table == table; available_seats += (10 - n) }
+		if available_seats >= table.seats.size #We can close this table
+			log "We are closing this table because we have enough open seats"
+			@table_player_counts.each do |other_table, n|
+				break if table.seats.size == 0
+				(10 - n).times do
+					p = table.seats.pop
+					other_table.join_table(p, @channel_hash[p])
+					@table_player_counts[other_table] += 1
+					break if table.seats.size == 0
+				end
+			end
+			@table_player_counts.delete(table)
+			true
+		else
+			false
+		end
+	end
+
+	def remove_busted_players(table)
+		table.queue.each do |bp|
+			log "Player #{bp.name} finished #{@players.size - @finish_order.size} out of #{@players.size}"
+			@finish_order << bp
+		end
+		table.queue = []
+	end
+
+	def start_tournament
+		@mutex.synchronize do
+			@started = true
+			give_starting_money
+			assign_players_to_tables
+		end
+		add_table_callbacks
+		start_games
+	end
+
+	def start_games
+		@tables.each do |t|
+			Thread.new(t) {|tab|
+				tab.start_table
+			}
+		end
+	end
+
+	def give_starting_money
+		@players.each do |player|
+			player.set_bankroll(@start_chips)
+		end
+	end
+
+	def assign_players_to_tables
+		player_queue = @players.shuffle
+		table_counts = choose_table_sizes
+		log "For #{player_queue.size} players, creating #{table_counts.size} tables of size #{table_counts.join(", ")}"
+		table_counts.each do |num_players|
+			table_id = @server.get_next_table_number
+			log "Creating table #{table_id} of size #{num_players}"
+			t = Table.new(@small_blind, table_id)
+			ng = NetworkGame.new(t, num_players, @log_mutex, @timelimit)
+			num_players.times do
+				p = player_queue.pop
+				log "Assigning player #{p.name} to table #{table_id}"
+				ng.join_table(p, @channel_hash[p])
+			end
+			@tables << ng
+			@server.register_table(t,ng)
+			@table_player_counts[ng] = num_players
+		end
+	end
+
+	def tourney_stats(table)
+		@mutex.synchronize do
+			{
+				'tournament' => {
+					'players_left' => @players.size - @finish_order.size,
+					'finished' => @finish_order.map {|p| p.name }
+				}
+			}
+		end
+	end
+
+	def add_table_callbacks
+		@tables.each do |t|
+			t.add_callback {|table| hand_finished(table)}
+			t.add_tourney_callback {|table| tourney_stats(table)}
+		end
+	end
+
+	def choose_table_sizes(max_per_table = 10)
+		#How many tables do we need?
+		num_tables = @players.size / max_per_table
+		ret = []
+		num_tables.times { ret << max_per_table}
+		rem = @players.size % max_per_table
+		puts "Max per table = #{max_per_table}, num players = #{@players.size} and num tables is #{num_tables} and remainder is #{rem}"
+		if rem == 0
+			#We are goo
+		elsif rem == (max_per_table - 1)
+			#We are still good
+			ret << rem
+		elsif (max_per_table - rem) <= num_tables
+			i = num_tables - 1
+			while rem < max_per_table - 1
+				ret[i] -= 1
+				rem += 1
+				i -= 1
+			end
+			ret << rem
+		else
+			ret = choose_table_sizes(max_per_table - 1)
+		end
+		ret
+	end
+end
+
+#A class for running a network based game
+class NetworkGame
+	attr_accessor :started, :table
+
+	def initialize(table, min_players = 2, log_mutex = nil, time_limit = 30)
+		@table = table
+		@timelimit = time_limit
+		@table.timelimit = @timelimit
+		@log_mutex = log_mutex || Mutex.new
+		@started = false
+		@mutex = Mutex.new
+		@min_players = min_players
+		@channel_hash = {}
+		@hand_number = 0
+		@move_number = 0
+		@callback = nil
+		@tourney_callback = nil
+	end
+
+	def log(m, use_pp = false)
+		@log_mutex.synchronize do
+			if use_pp
+				pp m
+			else
+				puts "#{Time.now}: #{m}"
+			end
+		end
+	end
+
+	def seats
+		@table.seats
+	end
+
+	def add_callback(&block)
+		@callback = block
+	end
+
+	def add_tourney_callback(&block)
+		@tourney_callback = block
 	end
 
 	def join_table(player, channel)
@@ -44,17 +291,21 @@ class NetworkGame
 	end
 
 	def start_hand
-		log "Starting hand"
-		add_players_from_queue
-		@hand_number += 1
-		@table.deal
-		start_timer
-		send_game_state
+		@mutex.synchronize do
+			log "Starting hand"
+			add_players_from_queue
+			@hand_number += 1
+			@table.deal
+			start_timer
+			send_game_state
+		end
 	end
 
 	def send_game_state(no_active = false)
-		base_hash = {'hand_number' => @hand_number, 'table_id' => @table_id,
+		base_hash = {'hand_number' => @hand_number, 'table_id' => @table.table_id,
 			'state' => @table.table_state_hash(no_active), 'type' => 'game_state'}
+		base_hash.merge!(@tourney_callback.call(self)) if @tourney_callback
+		t = Time.now
 		@channel_hash.each do |player, channel|
 			player_hash = {'player' => player.to_hash}
 			if !@table.queue.include?(player) and @table.hands[player]
@@ -63,10 +314,11 @@ class NetworkGame
 			end
 			channel.publish(base_hash.merge(player_hash).to_json)
 		end
+		log "Took #{Time.now - t} seconds to send #{@channel_hash.size} table updates"
 	end
 
 	def send_winner(winner_hash, hands)
-		hsh = {'hand_number' => @hand_number, 'table_id' => @table_id,
+		hsh = {'hand_number' => @hand_number, 'table_id' => @table.table_id,
 			'winners' => winner_hash.to_a.map {|p, w| {'player' => p.to_hash, 'winnings' => w} },
 			'type' => 'winner'}
 		if hands.size > 1
@@ -81,15 +333,19 @@ class NetworkGame
 	end
 
 	def check_start
+		should_start = false
 		@mutex.synchronize do
-			if !@started and @table.seats.size >= @min_players
-				log "Starting game at table #{@table.table_id} with #{@table.seats.size} players"
-				@table.randomize_button
-				@table.randomize_seats
-				@started = true
-				start_hand
-			end
+			should_start = (!@started and @table.seats.size >= @min_players)
 		end
+		start_table if should_start
+	end
+
+	def start_table
+		log "Starting game at table #{@table.table_id} with #{@table.seats.size} players"
+		@table.randomize_button
+		@table.randomize_seats
+		@started = true
+		start_hand
 	end
 
 	def start_timer
@@ -98,7 +354,7 @@ class NetworkGame
 			sleep @timelimit
 			should_force_move = false
 			@mutex.synchronize do
-				should_force_move = (@move_number == move_num) and (acting_player == @table.acting_player)
+				should_force_move = (@started and (@move_number == move_num) and (acting_player == @table.acting_player))
 			end
 			if should_force_move
 				puts "Reached timelimit for player #{acting_player.name}... folding"
@@ -128,8 +384,10 @@ class NetworkGame
 		if @table.betting_complete?
 			next_round
 		else
-			start_timer
-			send_game_state
+			@mutex.synchronize do
+				send_game_state
+				start_timer
+			end
 		end
 	rescue
 		log "Rescued action error #{$!.inspect}"
@@ -138,7 +396,9 @@ class NetworkGame
 		@channel_hash[player].publish({'type' => 'error', 'hand_number' => @hand_number,
 			'table_id' => @table_id, 'message' => $!.message}.to_json)
 		sleep 2
-		send_game_state
+		@mutex.synchronize do
+			send_game_state
+		end
 	end
 	
 	def next_round
@@ -156,10 +416,16 @@ class NetworkGame
 				winner_hash = @table.showdown
 				send_winner(winner_hash, hands)
 				@table.remove_busted_players
+			end
+			if @callback
+				@callback.call(self)
+			else
 				if @table.seats.size > 1
 					start_hand
 				else
-					@started = false
+					@mutex.synchronize do
+						@started = false
+					end
 				end
 			end
 		else
@@ -260,7 +526,11 @@ class Player
 		@bankroll += amount
 		amount
 	end
-	
+
+	def set_bankroll(amount)
+		@bankroll = amount
+	end
+
 	def to_hash
 		{'name' => @name, 'bankroll' => @bankroll, 'id' => @player_id}
 	end
@@ -268,12 +538,12 @@ end #class Player
 
 # Represents a table of poker players
 class Table
-	attr_reader :board, :button, :phase, :small_blind, :seats, :pot, :current_bet,
-		:minimum_bet, :current_bets, :hands, :table_id, :queue
-	attr_accessor :timelimit
+	attr_reader :board, :button, :phase, :seats, :pot, :current_bet,
+		:minimum_bet, :current_bets, :hands, :table_id
+	attr_accessor :timelimit, :queue, :small_blind
 
 	PHASES = ['New Hand', 'Pre-Flop', 'Flop', 'Turn', 'River']
-	def initialize(small_blind = 1, table_id = nil)
+	def initialize(sb = 1, table_id = nil)
 		@seats = []
 		@queue = []
 		@button = 0
@@ -282,7 +552,7 @@ class Table
 		@board = []
 		@phase = 0
 		@timelimit = 30
-		@small_blind = small_blind
+		@small_blind = sb
 		@table_id = table_id
 	end
 
@@ -307,12 +577,13 @@ class Table
 	# @param [Boolean] no_active Set to true if there is no currently active player
 	# @return [Hash] A hash representing the state of the table
 	def table_state_hash(no_active = false)
-		ap = no_active ? {} : acting_player.to_hash
+		ap = (no_active or !acting_player) ? {} : acting_player.to_hash
 		hsh = {
 			'phase' => @phase,
 			'phase_name' => PHASES[@phase],
 			'button' => @button,
 			'pot' => @pot,
+			'big_blind' => big_blind, 
 			'current_bet' => @current_bet,
 			'minimum_bet' => @minimum_bet,
 			'players' => @seats.map {|p| p.to_hash},
@@ -467,6 +738,10 @@ class Table
 		@deck.deal_card
 		@board << @deck.deal_card
 		clear_bets
+	end
+
+	def player_in_position(pos)
+		@seats[person_in_spot(pos)]
 	end
 
 	#A helper method that wraps around if needed

@@ -1,7 +1,8 @@
 require 'config.rb' if File.exists?('config.rb')
 require 'timeout'
+require 'rubygems'
+require 'spire_io'
 if !defined?(USE_ENCRYPTION) or USE_ENCRYPTION
-	require 'rubygems'
 	require 'openpgp'
 	require 'openssl'
 else
@@ -94,6 +95,8 @@ class PokerClientBase
 				end
 				@player_channel = new_channel(resp['url'], cap)
 				@player_updates = new_sub(resp['response_url'], resp_cap)
+				@player_updates.add_listener('player_update') {|mess| table_update_proxy(mess)}
+				@player_updates.start_listening
 				@player_id = resp['player_id']
 			end
 		end
@@ -102,13 +105,11 @@ class PokerClientBase
 	#Joins a table described by data
 	# Data should include an 'id', 'url', 'capability', and 'name'
 	def join_specific_table(data)
-		@hand_hash = {}
-		@game_state_hash = {}
-		@active_table_number = data['id']
-		@active_table_name = data['name']
-		@player_updates.add_listener('player_update') {|m| table_update_proxy(m)}
-		@player_updates.start_listening
-		@player_channel.publish({'table_id' => @active_table_number, 'command' => 'join_table'}.to_json)
+		@player_channel.publish({'table_id' => data['id'], 'command' => 'join_table'}.to_json)
+	end
+
+	def join_specific_tournament(data)
+		@player_channel.publish({'tournament_id' => data['id'], 'command' => 'join_tournament'}.to_json)
 	end
 
 	#Listener for table updates, proxys the requests to the correct handler
@@ -130,11 +131,9 @@ class PokerClientBase
 	def game_state_update(parsed_state)
 		game_state = nil
 		@mutex.synchronize do
-			@hand_hash[parsed_state['hand_number']] = parsed_state['hand']
 			@seat_number = parsed_state['seat_number']
 			@bankroll = parsed_state['player']['bankroll']
 			game_state = GameState.new(parsed_state, @player_id, parsed_state['hand'])
-			@game_state_hash[parsed_state['hand_number']] = game_state
 		end
 		@mutex.synchronize do
 			self.display_game_state(game_state) if self.respond_to?(:display_game_state)
@@ -142,7 +141,7 @@ class PokerClientBase
 				begin
 					Timeout.timeout(game_state.timelimit) do
 						move = ask_for_move(game_state)
-						@player_channel.publish({'table_id' => @active_table_number,
+						@player_channel.publish({'table_id' => game_state.table_id,
 						'command' => 'action', 'action' => move}.to_json)
 					end
 				rescue Timeout::Error
@@ -196,11 +195,23 @@ class PokerClientBase
 		tc.listen.map {|x| JSON.parse(x) rescue nil}.compact
 	end
 
+	# Get a listing of all available tables
+	# @return [Array] An array of hashes describing each table
+	def get_all_tournaments
+		tc = new_sub(@discovery['tournaments']['url'], @discovery['tournaments']['capability'])
+		tc.listen.map {|x| JSON.parse(x) rescue nil}.compact
+	end
+
 	#Displays all available tables and prompts to join one
 	#Uses gets, so requires CLI input
 	def join_table
 		raise "No player yet!" unless @player_id
 		join_specific_table(ask_to_choose_table)
+	end
+
+	def join_tournament
+		raise "No player yet!" unless @player_id
+		join_specific_tournament(ask_to_choose_tournament)
 	end
 
 	def ask_to_choose_table
@@ -218,6 +229,29 @@ class PokerClientBase
 		hsh_map[tnum]
 	end
 
+	def ask_to_choose_tournament
+		#get all the possible tables
+		all_tourneys = get_all_tournaments
+		hsh_map = {}
+		num = 0
+		all_tourneys.each do |tourney|
+			num += 1
+			hsh_map[num] = tourney
+			puts "Tourney #{num}: #{tourney['name']} Starting at #{Time.at(tourney['starting_time'])}"
+		end
+		puts "Join which tourney?"
+		tnum = gets.chomp.to_i
+		hsh_map[tnum]
+	end
+
+	def check_fold(game_state)
+		game_state.available_moves['check'] ? 'check' : 'fold'
+	end
+
+	def ask_for_move(game_state)
+		raise "Subclass does not define ask_for_move!"
+	end
+
 	def new_sub(url, capability)
 		Spire::Subscription.new(@spire,
 			{'capability' => capability, 'url' => url})
@@ -226,10 +260,6 @@ class PokerClientBase
 	def new_channel(url, capability)
 		Spire::Channel.new(@spire,
 			{'capability' => capability, 'url' => url})
-	end
-
-	def ask_for_move(game_state)
-		raise "Subclass does not define ask_for_move!"
 	end
 
 	#A class representing the current state of the game
