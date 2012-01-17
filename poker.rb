@@ -54,6 +54,8 @@ class Tournament
 
 	def hand_finished(table)
 		should_start_hand = false
+		r = rand(9999999)
+		log "Starting hand finished #{r}"
 		@mutex.synchronize do
 			table.add_players_from_queue
 			remove_busted_players(table.table)
@@ -65,6 +67,7 @@ class Tournament
 				should_start_hand = table.seats.size > 1
 			end
 		end
+		log "End hand finished #{r}"
 		if should_start_hand
 			log "Starting hand for #{table.table.table_id}"
 			table.start_hand
@@ -88,7 +91,7 @@ class Tournament
 
 	def current_small_blind
 		elapsed = (Time.now - @start_time).to_i
-		num_levels = (elapsed / @blind_timer) + 1
+		num_levels = (elapsed / @blind_timer)
 		sb = @small_blind * (2 ** num_levels)
 		log "#{elapsed} seconds have gone by, so the level is #{num_levels}, blind timer is #{@blind_timer} with blind is now at #{sb}"
 		sb
@@ -105,9 +108,11 @@ class Tournament
 			next if other_table == table
 			if table.seats.size > num_players + 1
 				num_to_move = table.seats.size - (num_players + 1)
+				log "Moving #{num_to_move} players from table #{table.table.table_id} to #{other_table.table.table_id}"
 				num_to_move.times do
 					player_to_move = table.table.player_in_position(table.table.button + 3)
 					other_table.join_table(player_to_move, @channel_hash[player_to_move])
+					@server.signal_player_to_subscribe_to_table(player_to_move, other_table.table)
 					table.table.seats.delete(player_to_move)
 					@table_player_counts[table] -= 1
 					@table_player_counts[other_table] += 1
@@ -120,17 +125,25 @@ class Tournament
 		available_seats = 0
 		@table_player_counts.each {|other_table, n| next if other_table == table; available_seats += (10 - n) }
 		if available_seats >= table.seats.size #We can close this table
-			log "We are closing this table because we have enough open seats"
+			log "We are closing table #{table.table.table_id} because we have enough open seats"
+			new_counts_hash = {}
 			@table_player_counts.each do |other_table, n|
 				break if table.seats.size == 0
+				log "Moving #{10 - n} players to table #{other_table.table.table_id}"
+				new_counts_hash[other_table] = n
 				(10 - n).times do
 					p = table.seats.pop
 					other_table.join_table(p, @channel_hash[p])
-					@table_player_counts[other_table] += 1
+					@server.signal_player_to_subscribe_to_table(p, other_table.table)
+					new_counts_hash[other_table] += 1
 					break if table.seats.size == 0
 				end
 			end
+			new_counts_hash.each do |other_table, n|
+				@table_player_counts[other_table] = n
+			end
 			@table_player_counts.delete(table)
+			log "Done closing table"
 			true
 		else
 			false
@@ -285,7 +298,11 @@ class NetworkGame
 			end
 		end
 	end
-	
+
+	def set_table_channel(channel)
+		@table_channel = channel
+	end
+
 	def add_players_from_queue
 		@table.add_players_from_queue
 	end
@@ -297,24 +314,29 @@ class NetworkGame
 			@hand_number += 1
 			@table.deal
 			start_timer
-			send_game_state
+			send_game_state(false, true)
 		end
 	end
 
-	def send_game_state(no_active = false)
+	def send_game_state(no_active = false, include_hands = false)
 		base_hash = {'hand_number' => @hand_number, 'table_id' => @table.table_id,
 			'state' => @table.table_state_hash(no_active), 'type' => 'game_state'}
 		base_hash.merge!(@tourney_callback.call(self)) if @tourney_callback
 		t = Time.now
-		@channel_hash.each do |player, channel|
-			player_hash = {'player' => player.to_hash}
-			if !@table.queue.include?(player) and @table.hands[player]
-				hand = @table.hands[player].map {|x| x.to_hash}
-				player_hash.merge!({'hand' => hand, 'seat_number' => @table.player_position(player)})
+		if include_hands
+			@channel_hash.each do |player, channel|
+				player_hash = {'player' => player.to_hash}
+				if !@table.queue.include?(player) and @table.hands[player]
+					hand = @table.hands[player].map {|x| x.to_hash}
+					player_hash.merge!({'hand' => hand, 'seat_number' => @table.player_position(player)})
+				end
+				channel.publish(base_hash.merge(player_hash).to_json)
 			end
-			channel.publish(base_hash.merge(player_hash).to_json)
+			log "Took #{Time.now - t} seconds to send #{@channel_hash.size} table updates"
+		else #don't include the hands
+			@table_channel.publish(base_hash.to_json)
+			log "Took #{Time.now - t} seconds to send 1 table update"
 		end
-		log "Took #{Time.now - t} seconds to send #{@channel_hash.size} table updates"
 	end
 
 	def send_winner(winner_hash, hands)
@@ -327,9 +349,7 @@ class NetworkGame
 				hsh['shown_hands'][player.name] = hand.map {|x| x.to_hash}
 			end
 		end
-		@channel_hash.each do |player, channel|
-			channel.publish(hsh.to_json)
-		end
+		@table_channel.publish(hsh.to_json)
 	end
 
 	def check_start
@@ -392,7 +412,7 @@ class NetworkGame
 	rescue
 		log "Rescued action error #{$!.inspect}"
 		log $!.backtrace.join("\n")
-		start_timer
+		#start_timer
 		@channel_hash[player].publish({'type' => 'error', 'hand_number' => @hand_number,
 			'table_id' => @table_id, 'message' => $!.message}.to_json)
 		sleep 2
@@ -558,7 +578,7 @@ class Table
 
 	def remove_busted_players
 		@seats.each do |player|
-			@queue << player if player.bankroll < big_blind
+			@queue << player if player.bankroll <= 0
 		end
 		@seats -= @queue
 	end
@@ -566,7 +586,7 @@ class Table
 	def add_players_from_queue
 		players_to_remove = []
 		@queue.each do |player|
-			next if player.bankroll < @small_blind
+			next if player.bankroll <= 0
 			players_to_remove << player
 			self.add_player(player) unless @seats.include?(player)
 		end
@@ -645,11 +665,13 @@ class Table
 	end
 
 	def pay_blinds
-		@pot += @small_blind * 3
 		small = @seats[person_in_spot(@button + 1)]
 		big = @seats[person_in_spot(@button + 2)]
-		@current_bets[small] = small.make_bet(@small_blind)
-		@current_bets[big] = big.make_bet(big_blind)
+		sb = small.bankroll > @small_blind ? @small_blind : small.bankroll
+		bb = big.bankroll > big_blind ? big_blind : big.bankroll
+		@pot += sb + bb
+		@current_bets[small] = small.make_bet(sb)
+		@current_bets[big] = big.make_bet(bb)
 	end
 
 	def randomize_button

@@ -1,4 +1,5 @@
 require 'config.rb' if File.exists?('config.rb')
+require 'pp'
 require 'timeout'
 require 'rubygems'
 require 'spire_io'
@@ -22,6 +23,8 @@ class PokerClientBase
 		@mutex = Mutex.new
 		@player_id = nil
 		@spire = Spire.new
+		@table_channel = nil
+		@hand_hash = {}
 		discovery_url ||= get_discovery_url
 		discovery_capability ||= get_discovery_capability
 		d_sub = new_sub(discovery_url, discovery_capability)
@@ -102,6 +105,17 @@ class PokerClientBase
 		end
 	end
 
+	def subscribe_to_table(parsed)
+		puts "Subscribing to table with instructions:"
+		pp parsed
+		@mutex.synchronize do
+			@table_channel.stop_listening if @table_channel
+			@table_channel = new_sub(parsed['url'], parsed['capability'])
+			@table_channel.add_listener('table_update') {|mess| table_update_proxy(mess)}
+			@table_channel.start_listening
+		end
+	end
+
 	#Joins a table described by data
 	# Data should include an 'id', 'url', 'capability', and 'name'
 	def join_specific_table(data)
@@ -115,12 +129,11 @@ class PokerClientBase
 	#Listener for table updates, proxys the requests to the correct handler
 	def table_update_proxy(m)
 		parsed = JSON.parse(m)
-		if parsed['type'] == 'game_state'
-			game_state_update(parsed)
-		elsif parsed['type'] == 'winner'
-			winner_update(parsed)
-		elsif parsed['type'] == 'error'
-			invalid_move(parsed)
+		case parsed['type']
+			when 'game_state' then game_state_update(parsed)
+			when 'winner' then winner_update(parsed)
+			when 'error' then invalid_move(parsed)
+			when 'table_subscription' then subscribe_to_table(parsed)
 		end
 	end
 
@@ -131,9 +144,15 @@ class PokerClientBase
 	def game_state_update(parsed_state)
 		game_state = nil
 		@mutex.synchronize do
-			@seat_number = parsed_state['seat_number']
-			@bankroll = parsed_state['player']['bankroll']
-			game_state = GameState.new(parsed_state, @player_id, parsed_state['hand'])
+			if parsed_state['hand']
+				@hand_hash[parsed_state['hand_number']] = parsed_state['hand']
+				hand = parsed_state['hand']
+				@seat_number = parsed_state['seat_number']
+				@bankroll = parsed_state['player']['bankroll']
+			else
+				hand = @hand_hash[parsed_state['hand_number']]
+			end
+			game_state = GameState.new(parsed_state, @player_id, hand)
 		end
 		@mutex.synchronize do
 			self.display_game_state(game_state) if self.respond_to?(:display_game_state)
@@ -141,6 +160,7 @@ class PokerClientBase
 				begin
 					Timeout.timeout(game_state.timelimit) do
 						move = ask_for_move(game_state)
+						move = 'fold' unless move
 						@player_channel.publish({'table_id' => game_state.table_id,
 						'command' => 'action', 'action' => move}.to_json)
 					end

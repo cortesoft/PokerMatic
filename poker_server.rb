@@ -148,8 +148,12 @@ class PokerServer
 			blinds = (command['blinds'] || 1).to_i
 			table = Table.new(blinds, next_table_number)
 			game = NetworkGame.new(table, min_players, @log_mutex)
+			channel = @spire["table_#{next_table_number}"]
+			sub = channel.subscribe("sub_table_#{next_table_number}")
+			game.set_table_channel(channel)
 			@tables[next_table_number] = {:table => table, :min_players => min_players,
-				:game => game, :name => command['name'], :mutex => Mutex.new}
+				:game => game, :name => command['name'], :mutex => Mutex.new, :channel => channel,
+				:subscription => sub}
 			@tables_channel.publish({'command_id' => command['id'], 'name' => command['name'],
 				'id' => next_table_number, 'min_players' => min_players, 'blinds' => blinds}.to_json)
 		end
@@ -165,10 +169,29 @@ class PokerServer
 	#called by the tournament code
 	def register_table(table, network_game)
 		log "Registering table #{table.table_id}"
+		channel = @spire["table_#{table.table_id}"]
+		sub = channel.subscribe("sub_table_#{table.table_id}")
+		hsh = {:table => table, :min_players => 2,
+				:game => network_game, :name => "Table #{table.table_id}", :mutex => Mutex.new,
+				:channel => channel, :subscription => sub}
 		@mutex.synchronize do
-			@tables[table.table_id] = {:table => table, :min_players => 2,
-				:game => network_game, :name => "Table #{table.table_id}", :mutex => Mutex.new}
+			@tables[table.table_id] = hsh
+			network_game.set_table_channel(channel)
+			table.seats.each do |player|
+				signal_player_to_subscribe_to_table(player, table)
+			end
 		end
+		hsh
+	end
+
+	def signal_player_to_subscribe_to_table(player, table)
+		player_channel = @players[player.player_id][:response_channel]
+		table_sub = @tables[table.table_id][:subscription]
+		log "Telling player to join table"
+		hsh = {"type" => "table_subscription", "url" => table_sub.url,
+			"capability" => table_sub.capability}
+		log hsh, true
+		player_channel.publish(hsh.to_json)
 	end
 
 	#Process a request from a player channel
@@ -187,6 +210,7 @@ class PokerServer
 		table_data = nil
 		@mutex.synchronize do
 			table_data = @tables[command['table_id']]
+			signal_player_to_subscribe_to_table(player, table_data[:table])
 		end
 		return false unless table_data
 		table_data[:mutex].synchronize do
