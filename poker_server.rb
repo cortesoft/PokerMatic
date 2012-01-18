@@ -29,7 +29,7 @@ class PokerServer
 
 	def create_spire
 		t = Time.now
-		@spire = Spire.new
+		@spire = Spire.new("http://build.spire.io")
 		puts "Took #{Time.now - t} seconds to do discovery"
 		t = Time.now
 		if !defined?(API_KEY) or !API_KEY
@@ -187,11 +187,12 @@ class PokerServer
 	def signal_player_to_subscribe_to_table(player, table)
 		player_channel = @players[player.player_id][:response_channel]
 		table_sub = @tables[table.table_id][:subscription]
-		log "Telling player to join table"
+		log "Telling player #{player.name} to join table"
 		hsh = {"type" => "table_subscription", "url" => table_sub.url,
 			"capability" => table_sub.capability}
 		log hsh, true
 		player_channel.publish(hsh.to_json)
+		log "Done telling player #{player.name} to join table"
 	end
 
 	#Process a request from a player channel

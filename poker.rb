@@ -4,7 +4,7 @@ require 'set'
 class Tournament
 	attr_reader :start_time
 	# :start_time, :log_mutex, :time_limit, :small_blind, :blind_timer, :start_chips
-	# :tourney_id, :name, :server
+	# :tourney_id, :name, :server, :no_timer
 
 	def initialize(opts = {})
 		@server = opts[:server]
@@ -23,6 +23,7 @@ class Tournament
 		@started = false
 		@channel_hash = {}
 		@finish_order = []
+		@player_queue = {}
 		start_timer unless opts[:no_timer]
 	end
 	
@@ -54,20 +55,23 @@ class Tournament
 
 	def hand_finished(table)
 		should_start_hand = false
-		r = rand(9999999)
-		log "Starting hand finished #{r}"
+		log "Starting hand finished for table #{table.table.table_id}"
 		@mutex.synchronize do
 			table.add_players_from_queue
 			remove_busted_players(table.table)
+			log "Removed busted players for #{table.table.table_id}"
+			add_players_from_queue(table)
 			rebalance_tables(table)
+			log "Tables balanced busted players for #{table.table.table_id}"
 			#If we still have a table to start
 			check_for_winner
+			log "Checked for winner for #{table.table.table_id}"
 			if @table_player_counts[table]
 				set_blind_levels(table)
 				should_start_hand = table.seats.size > 1
 			end
 		end
-		log "End hand finished #{r}"
+		log "End hand finished #{table.table.table_id}"
 		if should_start_hand
 			log "Starting hand for #{table.table.table_id}"
 			table.start_hand
@@ -101,6 +105,18 @@ class Tournament
 		table.table.small_blind = current_small_blind
 	end
 
+	def add_players_from_queue(table)
+		@player_queue[table.table.table_id] ||= []
+		log "Adding players to the queue for #{table.table.table_id}, #{@player_queue[table.table.table_id].size} players"
+		@player_queue[table.table.table_id].each do |player|
+			log "Adding player #{player.name} to table #{table.table.table_id}"
+			table.add_player_to_table(player, @channel_hash[player])
+			@server.signal_player_to_subscribe_to_table(player, table.table)
+		end
+		@player_queue[table.table.table_id] = []
+		log "Done adding players from the queue for table id #{@player_queue[table.table.table_id]}"
+	end
+
 	def rebalance_tables(table)
 		@table_player_counts[table] = table.seats.size
 		return true if close_table_if_possible(table)
@@ -109,10 +125,11 @@ class Tournament
 			if table.seats.size > num_players + 1
 				num_to_move = table.seats.size - (num_players + 1)
 				log "Moving #{num_to_move} players from table #{table.table.table_id} to #{other_table.table.table_id}"
+				@player_queue[other_table.table.table_id] ||= []
+				log "The current queue for #{other_table.table.table_id} is: #{@player_queue[other_table.table.table_id].map {|x| x.name}.join(", ")}"
 				num_to_move.times do
 					player_to_move = table.table.player_in_position(table.table.button + 3)
-					other_table.join_table(player_to_move, @channel_hash[player_to_move])
-					@server.signal_player_to_subscribe_to_table(player_to_move, other_table.table)
+					@player_queue[other_table.table.table_id] << player_to_move
 					table.table.seats.delete(player_to_move)
 					@table_player_counts[table] -= 1
 					@table_player_counts[other_table] += 1
@@ -128,17 +145,19 @@ class Tournament
 			log "We are closing table #{table.table.table_id} because we have enough open seats"
 			new_counts_hash = {}
 			@table_player_counts.each do |other_table, n|
+				next if other_table == table
 				break if table.seats.size == 0
 				log "Moving #{10 - n} players to table #{other_table.table.table_id}"
+				@player_queue[other_table.table.table_id] ||= []
 				new_counts_hash[other_table] = n
 				(10 - n).times do
 					p = table.seats.pop
-					other_table.join_table(p, @channel_hash[p])
-					@server.signal_player_to_subscribe_to_table(p, other_table.table)
+					@player_queue[other_table.table.table_id] << p
 					new_counts_hash[other_table] += 1
 					break if table.seats.size == 0
 				end
 			end
+			log "Done moving all players"
 			new_counts_hash.each do |other_table, n|
 				@table_player_counts[other_table] = n
 			end
@@ -206,8 +225,10 @@ class Tournament
 		@mutex.synchronize do
 			{
 				'tournament' => {
+					'total_players' => @players.size,
 					'players_left' => @players.size - @finish_order.size,
-					'finished' => @finish_order.map {|p| p.name }
+					'finished' => @finish_order.map {|p| p.name },
+					'number_of_tables' => @table_player_counts.size
 				}
 			}
 		end
@@ -294,8 +315,15 @@ class NetworkGame
 			if !@started
 				@table.add_player(player) unless @table.seats.include?(player)
 			else
-				@table.queue << player
+				@table.add_player_to_queue(player)
 			end
+		end
+	end
+
+	def add_player_to_table(player, channel)
+		@mutex.synchronize do
+			@channel_hash[player] = channel
+			@table.add_player(player)
 		end
 	end
 
@@ -581,6 +609,12 @@ class Table
 			@queue << player if player.bankroll <= 0
 		end
 		@seats -= @queue
+	end
+
+	def add_player_to_queue(player)
+		puts "Adding player #{player.name} to queue"
+		@queue << player
+		puts "New queue: #{@queue.map {|x| x.name}.join(", ")}"
 	end
 
 	def add_players_from_queue

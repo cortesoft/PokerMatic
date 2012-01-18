@@ -22,7 +22,7 @@ class PokerClientBase
 	def initialize(discovery_url = nil, discovery_capability = nil)
 		@mutex = Mutex.new
 		@player_id = nil
-		@spire = Spire.new
+		@spire = Spire.new("http://build.spire.io")
 		@table_channel = nil
 		@hand_hash = {}
 		discovery_url ||= get_discovery_url
@@ -166,6 +166,9 @@ class PokerClientBase
 					end
 				rescue Timeout::Error
 					puts "Took too long to make a move, folding"
+				rescue
+					puts "Error: #{$!.inspect}"
+					pp $!.backtrace
 				end
 			end
 		end
@@ -295,6 +298,10 @@ class PokerClientBase
 		#Access the state hash or sub hash directly
 		def [](key)
 			self.send(key.to_sym)
+		end
+
+		def tournament?
+			!!@state_hash['tournament']
 		end
 
 		#Uses method missing to access the underlying state hash

@@ -99,8 +99,13 @@ class HumanClient < PokerClientBase
 	def print_state(data)
 		state = data['state']
 		puts "##################################"
+		puts "Table ##{data['table_id']}"
 		if state['players_waiting_to_join'].size > 0
 			puts "Players waiting to join: #{state['players_waiting_to_join'].map {|x| x['name']}.join(", ")}"
+		end
+		if td = data['tournament']
+			puts "Tournament: #{td['players_left']}/#{td['total_players']} with #{td['number_of_tables']}"
+			puts "Finish order: #{td['finished'].join(', ')}"
 		end
 		puts "Hand number #{data['hand_number']}"
 		puts state['phase_name']

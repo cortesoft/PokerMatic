@@ -5,7 +5,7 @@ require 'spire_io'
 
 class PokerAdmin
 	def initialize(admin_url = nil, admin_capability = nil)
-		@spire = Spire.new
+		@spire = Spire.new("http://build.spire.io")
 		@admin_channel = new_channel(admin_url, admin_capability)
 	end
 
@@ -25,8 +25,8 @@ class PokerAdmin
 
 	def choose_start_time
 		t = Time.now
-		base_time = Time.local(t.year, t.month, t.day, t.hour, rounded_minute(t.min))
-		base_time += 300 if base_time < t
+		base_time = Time.local(t.year, t.month, t.day, t.hour, t.min)
+		base_time += 60
 		hsh = {}
 		opt_num = 1
 		10.times do |n|
@@ -57,4 +57,7 @@ end
 if File.exists?('config.rb')
 	require 'config.rb' 
 	Admin = PokerAdmin.new(ADMIN_URL, ADMIN_CAPABILITY)
+	def ct
+		Admin.create_tournament
+	end
 end
