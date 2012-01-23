@@ -9,7 +9,7 @@ class Tournament
 	def initialize(opts = {})
 		@server = opts[:server]
 		@start_time = opts[:start_time] || Time.now + 600
-		@log_mutex = opts[:log_mutex] || Mutex.new
+		@log_mutex = opts[:log_mutex] || MutexTwo.new
 		@tourney_id = opts[:tourney_id] || rand(9999999)
 		@timelimit = opts[:time_limit] || 30
 		@small_blind = opts[:small_blind] || 1
@@ -19,7 +19,7 @@ class Tournament
 		@players = []
 		@tables = []
 		@table_player_counts = {}
-		@mutex = Mutex.new
+		@mutex = MutexTwo.new
 		@started = false
 		@channel_hash = {}
 		@finish_order = []
@@ -28,7 +28,7 @@ class Tournament
 	end
 	
 	def start_timer
-		@timer = Thread.new {
+		@start_timer = Thread.new {
 			sleep(@start_time - Time.now)
 			start_tournament
 		}
@@ -39,6 +39,8 @@ class Tournament
 			if !@started
 				@channel_hash[player] = channel
 				@players << player
+			else
+				log "#{player.name} can't join the tournament, as it has already started"
 			end
 		end
 	end
@@ -142,6 +144,7 @@ class Tournament
 		available_seats = 0
 		@table_player_counts.each {|other_table, n| next if other_table == table; available_seats += (10 - n) }
 		if available_seats >= table.seats.size #We can close this table
+			table.clear_timer
 			log "We are closing table #{table.table.table_id} because we have enough open seats"
 			new_counts_hash = {}
 			@table_player_counts.each do |other_table, n|
@@ -276,15 +279,17 @@ class NetworkGame
 		@table = table
 		@timelimit = time_limit
 		@table.timelimit = @timelimit
-		@log_mutex = log_mutex || Mutex.new
+		@log_mutex = log_mutex || MutexTwo.new
 		@started = false
-		@mutex = Mutex.new
+		@mutex = MutexTwo.new
 		@min_players = min_players
 		@channel_hash = {}
 		@hand_number = 0
 		@move_number = 0
 		@callback = nil
 		@tourney_callback = nil
+		@hand_timer = nil
+		@timer_mutex = MutexTwo.new
 	end
 
 	def log(m, use_pp = false)
@@ -352,15 +357,18 @@ class NetworkGame
 		base_hash.merge!(@tourney_callback.call(self)) if @tourney_callback
 		t = Time.now
 		if include_hands
+			#tot_time = 0
 			@channel_hash.each do |player, channel|
 				player_hash = {'player' => player.to_hash}
 				if !@table.queue.include?(player) and @table.hands[player]
 					hand = @table.hands[player].map {|x| x.to_hash}
 					player_hash.merge!({'hand' => hand, 'seat_number' => @table.player_position(player)})
 				end
+				#st = Time.now
 				channel.publish(base_hash.merge(player_hash).to_json)
+				#tot_time += (Time.now - st)
 			end
-			log "Took #{Time.now - t} seconds to send #{@channel_hash.size} table updates"
+			#log "Took #{Time.now - t} seconds to send #{@channel_hash.size} table updates with actual time of #{tot_time} doing publishing"
 		else #don't include the hands
 			@table_channel.publish(base_hash.to_json)
 			log "Took #{Time.now - t} seconds to send 1 table update"
@@ -393,26 +401,57 @@ class NetworkGame
 		@table.randomize_button
 		@table.randomize_seats
 		@started = true
+		#start_timer_thread
 		start_hand
 	end
 
-	def start_timer
-		@move_number += 1
-		Thread.new(@move_number, @table.acting_player) {|move_num, acting_player|
-			sleep @timelimit
-			should_force_move = false
-			@mutex.synchronize do
-				should_force_move = (@started and (@move_number == move_num) and (acting_player == @table.acting_player))
-			end
-			if should_force_move
-				puts "Reached timelimit for player #{acting_player.name}... folding"
-				take_action(acting_player, 'fold')
+	def stop_timer_thread
+		@timer_loop_thread.kill if @timer_loop_thread
+		@timer_loop_thread = nil
+	end
+
+	def start_timer_thread
+		@timer_loop_thread = Thread.new {
+			while true
+				sleep 5
+				should_force_move = false
+				@timer_mutex.synchronize do
+					should_force_move = (@started and @move_time_limit_info and
+						@move_time_limit_info[:move_number] == @move_number and @move_time_limit_info[:need_move_by] < Time.now)
+				end
+				if should_force_move
+					puts "Forcing move"
+					acting_player = nil
+					@mutex.synchronize do
+						acting_player = @table.acting_player
+					end
+					puts "Reached timelimit for player #{acting_player.name}... folding"
+					Thread.new(acting_player) {|ap|
+						take_action(ap, 'fold')
+					}
+				end
 			end
 		}
 	end
 
+	def set_timer(tl = nil)
+		tl ||= @timelimit
+		@timer_mutex.synchronize do
+			@last_timer_limit = tl
+			@move_number += 1
+			@move_time_limit_info = {:move_number => @move_number, :need_move_by => (Time.now + tl)}
+		end
+	end
+
+	def clear_timer
+		@timer_mutex.synchronize do
+			@move_time_limit_info = nil
+		end
+	end
+
 	def take_action(player, action)
 		raise "Hand is not started" unless @started
+		#clear_timer
 		@mutex.synchronize do
 			if action == 'fold'
 				log "Folding for #{player.name}"
@@ -434,13 +473,13 @@ class NetworkGame
 		else
 			@mutex.synchronize do
 				send_game_state
-				start_timer
+				#set_timer
 			end
 		end
 	rescue
 		log "Rescued action error #{$!.inspect}"
 		log $!.backtrace.join("\n")
-		#start_timer
+		#set_timer(@last_timer_limit / 2)
 		@channel_hash[player].publish({'type' => 'error', 'hand_number' => @hand_number,
 			'table_id' => @table_id, 'message' => $!.message}.to_json)
 		sleep 2

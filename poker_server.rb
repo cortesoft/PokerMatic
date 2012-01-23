@@ -6,6 +6,7 @@ require 'pp'
 require 'spire_io'
 require 'openssl'
 require 'openpgp'
+require 'mutex_two'
 
 class PokerServer
 	attr_reader :discovery_url, :discovery_capability, :admin_url, :admin_capability
@@ -17,7 +18,7 @@ class PokerServer
 		@player_number = Time.now.to_i - 1323827358
 		@table_number = Time.now.to_i - 1323828358
 		create_spire
-		@mutex = Mutex.new
+		@mutex = MutexTwo.new
 		@log_mutex = Mutex.new
 		@tables = {}
 		@players = {}
@@ -152,7 +153,7 @@ class PokerServer
 			sub = channel.subscribe("sub_table_#{next_table_number}")
 			game.set_table_channel(channel)
 			@tables[next_table_number] = {:table => table, :min_players => min_players,
-				:game => game, :name => command['name'], :mutex => Mutex.new, :channel => channel,
+				:game => game, :name => command['name'], :mutex => MutexTwo.new, :channel => channel,
 				:subscription => sub}
 			@tables_channel.publish({'command_id' => command['id'], 'name' => command['name'],
 				'id' => next_table_number, 'min_players' => min_players, 'blinds' => blinds}.to_json)
@@ -172,7 +173,7 @@ class PokerServer
 		channel = @spire["table_#{table.table_id}"]
 		sub = channel.subscribe("sub_table_#{table.table_id}")
 		hsh = {:table => table, :min_players => 2,
-				:game => network_game, :name => "Table #{table.table_id}", :mutex => Mutex.new,
+				:game => network_game, :name => "Table #{table.table_id}", :mutex => MutexTwo.new,
 				:channel => channel, :subscription => sub}
 		@mutex.synchronize do
 			@tables[table.table_id] = hsh

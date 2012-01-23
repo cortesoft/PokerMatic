@@ -3,6 +3,7 @@ require 'pp'
 require 'timeout'
 require 'rubygems'
 require 'spire_io'
+require 'mutex_two'
 if !defined?(USE_ENCRYPTION) or USE_ENCRYPTION
 	require 'openpgp'
 	require 'openssl'
@@ -20,7 +21,7 @@ class PokerClientBase
 	attr_accessor :player_id, :mutex, :name
 
 	def initialize(discovery_url = nil, discovery_capability = nil)
-		@mutex = Mutex.new
+		@mutex = MutexTwo.new
 		@player_id = nil
 		@spire = Spire.new("http://build.spire.io")
 		@table_channel = nil
