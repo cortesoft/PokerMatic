@@ -1,275 +1,6 @@
 module PokerMatic
 require 'set'
-
-class Tournament
-	attr_reader :start_time
-	# :start_time, :log_mutex, :time_limit, :small_blind, :blind_timer, :start_chips
-	# :tourney_id, :name, :server, :no_timer
-
-	def initialize(opts = {})
-		@server = opts[:server]
-		@start_time = opts[:start_time] || Time.now + 600
-		@log_mutex = opts[:log_mutex] || MutexTwo.new
-		@tourney_id = opts[:tourney_id] || rand(9999999)
-		@timelimit = opts[:time_limit] || 30
-		@small_blind = opts[:small_blind] || 1
-		@blind_timer = opts[:blind_timer] || 300
-		@start_chips = opts[:start_chips] || 1000
-		@name = opts[:name] || "Tourney #{@tourney_id}"
-		@players = []
-		@tables = []
-		@table_player_counts = {}
-		@mutex = MutexTwo.new
-		@started = false
-		@channel_hash = {}
-		@finish_order = []
-		@player_queue = {}
-		start_timer unless opts[:no_timer]
-	end
-	
-	def start_timer
-		@start_timer = Thread.new {
-			sleep(@start_time - Time.now)
-			start_tournament
-		}
-	end
-
-	def join_tournament(player, channel)
-		@mutex.synchronize do
-			if !@started
-				@channel_hash[player] = channel
-				@players << player
-			else
-				log "#{player.name} can't join the tournament, as it has already started"
-			end
-		end
-	end
-
-	def log(m, use_pp = false)
-		@log_mutex.synchronize do
-			if use_pp
-				pp m
-			else
-				puts "#{Time.now}: #{m}"
-			end
-		end
-	end
-
-	def hand_finished(table)
-		should_start_hand = false
-		log "Starting hand finished for table #{table.table.table_id}"
-		@mutex.synchronize do
-			table.add_players_from_queue
-			remove_busted_players(table.table)
-			log "Removed busted players for #{table.table.table_id}"
-			add_players_from_queue(table)
-			rebalance_tables(table)
-			log "Tables balanced busted players for #{table.table.table_id}"
-			#If we still have a table to start
-			check_for_winner
-			log "Checked for winner for #{table.table.table_id}"
-			if @table_player_counts[table]
-				set_blind_levels(table)
-				should_start_hand = table.seats.size > 1
-			end
-		end
-		log "End hand finished #{table.table.table_id}"
-		if should_start_hand
-			log "Starting hand for #{table.table.table_id}"
-			table.start_hand
-		else
-			log "Not starting another hand because table is empty"
-		end
-	end
-
-	def check_for_winner
-		if @players.size - @finish_order.size <= 1
-			log "We have a winner for the tournament #{@name}!"
-			winner = (@players - @finish_order).first
-			log "Winner: #{winner.name}!"
-			place = 2
-			@finish_order.reverse.each do |p|
-				log "#{place}. #{p.name}"
-				place += 1
-			end
-		end
-	end
-
-	def current_small_blind
-		elapsed = (Time.now - @start_time).to_i
-		num_levels = (elapsed / @blind_timer)
-		sb = @small_blind * (2 ** num_levels)
-		log "#{elapsed} seconds have gone by, so the level is #{num_levels}, blind timer is #{@blind_timer} with blind is now at #{sb}"
-		sb
-	end
-
-	def set_blind_levels(table)
-		table.table.small_blind = current_small_blind
-	end
-
-	def add_players_from_queue(table)
-		@player_queue[table.table.table_id] ||= []
-		log "Adding players to the queue for #{table.table.table_id}, #{@player_queue[table.table.table_id].size} players"
-		@player_queue[table.table.table_id].each do |player|
-			log "Adding player #{player.name} to table #{table.table.table_id}"
-			table.add_player_to_table(player, @channel_hash[player])
-			@server.signal_player_to_subscribe_to_table(player, table.table)
-		end
-		@player_queue[table.table.table_id] = []
-		log "Done adding players from the queue for table id #{@player_queue[table.table.table_id]}"
-	end
-
-	def rebalance_tables(table)
-		@table_player_counts[table] = table.seats.size
-		return true if close_table_if_possible(table)
-		@table_player_counts.each do |other_table, num_players|
-			next if other_table == table
-			if table.seats.size > num_players + 1
-				num_to_move = table.seats.size - (num_players + 1)
-				log "Moving #{num_to_move} players from table #{table.table.table_id} to #{other_table.table.table_id}"
-				@player_queue[other_table.table.table_id] ||= []
-				log "The current queue for #{other_table.table.table_id} is: #{@player_queue[other_table.table.table_id].map {|x| x.name}.join(", ")}"
-				num_to_move.times do
-					player_to_move = table.table.player_in_position(table.table.button + 3)
-					@player_queue[other_table.table.table_id] << player_to_move
-					table.table.seats.delete(player_to_move)
-					@table_player_counts[table] -= 1
-					@table_player_counts[other_table] += 1
-				end
-			end
-		end
-	end
-
-	def close_table_if_possible(table)
-		available_seats = 0
-		@table_player_counts.each {|other_table, n| next if other_table == table; available_seats += (10 - n) }
-		if available_seats >= table.seats.size #We can close this table
-			table.clear_timer
-			log "We are closing table #{table.table.table_id} because we have enough open seats"
-			new_counts_hash = {}
-			@table_player_counts.each do |other_table, n|
-				next if other_table == table
-				break if table.seats.size == 0
-				log "Moving #{10 - n} players to table #{other_table.table.table_id}"
-				@player_queue[other_table.table.table_id] ||= []
-				new_counts_hash[other_table] = n
-				(10 - n).times do
-					p = table.seats.pop
-					@player_queue[other_table.table.table_id] << p
-					new_counts_hash[other_table] += 1
-					break if table.seats.size == 0
-				end
-			end
-			log "Done moving all players"
-			new_counts_hash.each do |other_table, n|
-				@table_player_counts[other_table] = n
-			end
-			@table_player_counts.delete(table)
-			log "Done closing table"
-			true
-		else
-			false
-		end
-	end
-
-	def remove_busted_players(table)
-		table.queue.each do |bp|
-			log "Player #{bp.name} finished #{@players.size - @finish_order.size} out of #{@players.size}"
-			@finish_order << bp
-		end
-		table.queue = []
-	end
-
-	def start_tournament
-		@mutex.synchronize do
-			@started = true
-			give_starting_money
-			assign_players_to_tables
-		end
-		add_table_callbacks
-		start_games
-	end
-
-	def start_games
-		@tables.each do |t|
-			Thread.new(t) {|tab|
-				tab.start_table
-			}
-		end
-	end
-
-	def give_starting_money
-		@players.each do |player|
-			player.set_bankroll(@start_chips)
-		end
-	end
-
-	def assign_players_to_tables
-		player_queue = @players.shuffle
-		table_counts = choose_table_sizes
-		log "For #{player_queue.size} players, creating #{table_counts.size} tables of size #{table_counts.join(", ")}"
-		table_counts.each do |num_players|
-			table_id = @server.get_next_table_number
-			log "Creating table #{table_id} of size #{num_players}"
-			t = Table.new(@small_blind, table_id)
-			ng = NetworkGame.new(t, num_players, @log_mutex, @timelimit)
-			num_players.times do
-				p = player_queue.pop
-				log "Assigning player #{p.name} to table #{table_id}"
-				ng.join_table(p, @channel_hash[p])
-			end
-			@tables << ng
-			@server.register_table(t,ng)
-			@table_player_counts[ng] = num_players
-		end
-	end
-
-	def tourney_stats(table)
-		@mutex.synchronize do
-			{
-				'tournament' => {
-					'total_players' => @players.size,
-					'players_left' => @players.size - @finish_order.size,
-					'finished' => @finish_order.map {|p| p.name },
-					'number_of_tables' => @table_player_counts.size
-				}
-			}
-		end
-	end
-
-	def add_table_callbacks
-		@tables.each do |t|
-			t.add_callback {|table| hand_finished(table)}
-			t.add_tourney_callback {|table| tourney_stats(table)}
-		end
-	end
-
-	def choose_table_sizes(max_per_table = 10)
-		#How many tables do we need?
-		num_tables = @players.size / max_per_table
-		ret = []
-		num_tables.times { ret << max_per_table}
-		rem = @players.size % max_per_table
-		puts "Max per table = #{max_per_table}, num players = #{@players.size} and num tables is #{num_tables} and remainder is #{rem}"
-		if rem == 0
-			#We are goo
-		elsif rem == (max_per_table - 1)
-			#We are still good
-			ret << rem
-		elsif (max_per_table - rem) <= num_tables
-			i = num_tables - 1
-			while rem < max_per_table - 1
-				ret[i] -= 1
-				rem += 1
-				i -= 1
-			end
-			ret << rem
-		else
-			ret = choose_table_sizes(max_per_table - 1)
-		end
-		ret
-	end
-end
+require 'server/tournament'
 
 #A class for running a network based game
 class NetworkGame
@@ -346,33 +77,39 @@ class NetworkGame
 			add_players_from_queue
 			@hand_number += 1
 			@table.deal
-			start_timer
+			set_timer
 			send_game_state(false, true)
 		end
 	end
 
-	def send_game_state(no_active = false, include_hands = false)
+	def send_game_state(no_active = false, include_hands = false, skip_players = [])
 		base_hash = {'hand_number' => @hand_number, 'table_id' => @table.table_id,
 			'state' => @table.table_state_hash(no_active), 'type' => 'game_state'}
 		base_hash.merge!(@tourney_callback.call(self)) if @tourney_callback
 		t = Time.now
 		if include_hands
-			#tot_time = 0
+			tot_time = 0
 			@channel_hash.each do |player, channel|
+				next if skip_players.include?(player)
 				player_hash = {'player' => player.to_hash}
 				if !@table.queue.include?(player) and @table.hands[player]
 					hand = @table.hands[player].map {|x| x.to_hash}
 					player_hash.merge!({'hand' => hand, 'seat_number' => @table.player_position(player)})
 				end
-				#st = Time.now
+				st = Time.now
 				channel.publish(base_hash.merge(player_hash).to_json)
-				#tot_time += (Time.now - st)
+				skip_players << player
+				tot_time += (Time.now - st)
 			end
-			#log "Took #{Time.now - t} seconds to send #{@channel_hash.size} table updates with actual time of #{tot_time} doing publishing"
+			log "Took #{Time.now - t} seconds to send #{@channel_hash.size} table updates with actual time of #{tot_time} doing publishing"
 		else #don't include the hands
 			@table_channel.publish(base_hash.to_json)
 			log "Took #{Time.now - t} seconds to send 1 table update"
 		end
+	rescue Excon::Errors::SocketError
+		log "WARNING: Got a socket error #{$!} trying again"
+		sleep 1
+		send_game_state(no_active, include_hands, skip_players)
 	end
 
 	def send_winner(winner_hash, hands)
@@ -443,6 +180,10 @@ class NetworkGame
 		end
 	end
 
+	def kill_timer_thread
+		@timer_loop_thread.kill if @timer_loop_thread
+	end
+
 	def clear_timer
 		@timer_mutex.synchronize do
 			@move_time_limit_info = nil
@@ -451,7 +192,7 @@ class NetworkGame
 
 	def take_action(player, action)
 		raise "Hand is not started" unless @started
-		#clear_timer
+		clear_timer
 		@mutex.synchronize do
 			if action == 'fold'
 				log "Folding for #{player.name}"
@@ -473,13 +214,13 @@ class NetworkGame
 		else
 			@mutex.synchronize do
 				send_game_state
-				#set_timer
+				set_timer
 			end
 		end
 	rescue
 		log "Rescued action error #{$!.inspect}"
 		log $!.backtrace.join("\n")
-		#set_timer(@last_timer_limit / 2)
+		set_timer(@last_timer_limit / 2)
 		@channel_hash[player].publish({'type' => 'error', 'hand_number' => @hand_number,
 			'table_id' => @table_id, 'message' => $!.message}.to_json)
 		sleep 2
@@ -525,10 +266,10 @@ class NetworkGame
 				end
 				next_round
 			else
-				start_timer
 				@mutex.synchronize do
 					send_game_state
 				end
+				set_timer
 			end
 		end
 	end

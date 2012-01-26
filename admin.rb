@@ -5,7 +5,7 @@ require 'spire_io'
 
 class PokerAdmin
 	def initialize(admin_url = nil, admin_capability = nil)
-		@spire = Spire.new("http://build.spire.io")
+		@spire = Spire.new#("http://build.spire.io")
 		@admin_channel = new_channel(admin_url, admin_capability)
 	end
 

@@ -23,7 +23,7 @@ class PokerClientBase
 	def initialize(discovery_url = nil, discovery_capability = nil)
 		@mutex = MutexTwo.new
 		@player_id = nil
-		@spire = Spire.new("http://build.spire.io")
+		@spire = Spire.new#("http://build.spire.io")
 		@table_channel = nil
 		@hand_hash = {}
 		discovery_url ||= get_discovery_url
@@ -109,12 +109,11 @@ class PokerClientBase
 	def subscribe_to_table(parsed)
 		puts "Subscribing to table with instructions:"
 		pp parsed
-		@mutex.synchronize do
-			@table_channel.stop_listening if @table_channel
-			@table_channel = new_sub(parsed['url'], parsed['capability'])
-			@table_channel.add_listener('table_update') {|mess| table_update_proxy(mess)}
-			@table_channel.start_listening
-		end
+		@table_channel.stop_listening if @table_channel
+		@table_channel = new_sub(parsed['url'], parsed['capability'])
+		@table_channel.add_listener('table_update') {|mess| table_update_proxy(mess)}
+		@table_channel.start_listening
+		puts "Subscribed"
 	end
 
 	#Joins a table described by data
@@ -222,6 +221,8 @@ class PokerClientBase
 	# Get a listing of all available tables
 	# @return [Array] An array of hashes describing each table
 	def get_all_tournaments
+		pp "Discovery:"
+		pp @discovery
 		tc = new_sub(@discovery['tournaments']['url'], @discovery['tournaments']['capability'])
 		tc.listen.map {|x| JSON.parse(x) rescue nil}.compact
 	end

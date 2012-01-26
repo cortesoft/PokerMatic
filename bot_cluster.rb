@@ -7,19 +7,20 @@ NAMES = ['Abe', 'Ben', 'Cal', 'Dave', 'Ernie', 'Frank', 'Gary', 'Herb', 'Irvin',
 	'Kevin', 'Lenny', 'Mike', 'Nate', 'Oren', 'Pat', 'Quin', 'Rod', 'Sam', 'Tom', 'Ursala',
 	'Vince', 'Will', 'Xavier', 'Zed', 'Alice', 'Betty', 'Carla', 'Daisy', 'Eunice', 'Fern',
 	'Gertrude', 'Harriet', 'Ivy', 'Jill', 'Kelly', 'Leslie', 'Mindy', 'Nelly', 'Ophilia']
-KLASSES = [AllInBot, SmartBot, SteadyBot, RandomClient]
+KLASSES = {AllInBot => "AB", SmartBot => "SB", SteadyBot => "ST", RandomClient => "RB"}
 
 if $PROGRAM_NAME == __FILE__
 	all_clients = []
 	nums = {}
 	names = NAMES.shuffle + NAMES.shuffle + NAMES.shuffle
-	KLASSES.each do |klass|
+	KLASSES.keys.each do |klass|
 		puts "How many #{klass} clients?"
 		nums[klass] = gets.chomp.to_i
 	end
-	KLASSES.each do |klass|
+	KLASSES.each do |klass, class_name|
 		nums[klass].times do
 			name = names.shift
+			name = "#{class_name} #{name}"
 			puts "Creating #{klass} client #{name}"
 			client = klass.new
 			client.create_user(name)
