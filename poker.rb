@@ -90,20 +90,27 @@ class NetworkGame
 		if include_hands
 			tot_time = 0
 			num_sent = 0
-			@channel_hash.each do |player, channel|
-				next if skip_players.include?(player)
-				next unless @table.queue.include?(player) or @table.seats.include?(player)
-				player_hash = {'player' => player.to_hash}
-				if !@table.queue.include?(player) and @table.hands[player]
-					hand = @table.hands[player].map {|x| x.to_hash}
-					player_hash.merge!({'hand' => hand, 'seat_number' => @table.player_position(player)})
-				end
-				st = Time.now
-				channel.publish(base_hash.merge(player_hash).to_json)
-				num_sent += 1
-				skip_players << player
-				tot_time += (Time.now - st)
+			all_threads = []
+			@sgs_mutex = MutexTwo.new
+			@channel_hash.each do |player_o, channel_o|
+				next if skip_players.include?(player_o)
+				next unless @table.queue.include?(player_o) or @table.seats.include?(player_o)
+				all_threads << Thread.new(player_o, channel_o) {|player, channel|
+					player_hash = {'player' => player.to_hash}
+					if !@table.queue.include?(player) and @table.hands[player]
+						hand = @table.hands[player].map {|x| x.to_hash}
+						player_hash.merge!({'hand' => hand, 'seat_number' => @table.player_position(player)})
+					end
+					st = Time.now
+					channel.publish(base_hash.merge(player_hash).to_json)
+					@sgs_mutex.synchronize do
+						num_sent += 1
+						skip_players << player
+						tot_time += (Time.now - st)
+					end
+				}
 			end
+			all_threads.each {|th| th.join}
 			log "Took #{Time.now - t} seconds to send #{num_sent} table updates with actual time of #{tot_time} doing publishing"
 		else #don't include the hands
 			@table_channel.publish(base_hash.to_json)

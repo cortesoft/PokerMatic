@@ -111,6 +111,7 @@ class PokerClientBase
 		pp parsed
 		@table_channel.stop_listening if @table_channel
 		@table_channel = new_sub(parsed['url'], parsed['capability'])
+		@table_channel.last = ((Time.now.to_i - 5) * 1000)
 		@table_channel.add_listener('table_update') {|mess| table_update_proxy(mess)}
 		@table_channel.start_listening
 		puts "Subscribed"
