@@ -195,7 +195,7 @@ class Tournament
 			available_seats += (10 - n)
 		end
 		if available_seats >= network_game.seats.size #We can close this table
-			network_game.kill_timer_thread
+			network_game.stop_timer_thread
 			table = network_game.table
 			log "We are closing table #{table.table_id} because we have enough open seats"
 			new_counts_hash = {}

@@ -89,8 +89,10 @@ class NetworkGame
 		t = Time.now
 		if include_hands
 			tot_time = 0
+			num_sent = 0
 			@channel_hash.each do |player, channel|
 				next if skip_players.include?(player)
+				next unless @table.queue.include?(player) or @table.seats.include?(player)
 				player_hash = {'player' => player.to_hash}
 				if !@table.queue.include?(player) and @table.hands[player]
 					hand = @table.hands[player].map {|x| x.to_hash}
@@ -98,10 +100,11 @@ class NetworkGame
 				end
 				st = Time.now
 				channel.publish(base_hash.merge(player_hash).to_json)
+				num_sent += 1
 				skip_players << player
 				tot_time += (Time.now - st)
 			end
-			log "Took #{Time.now - t} seconds to send #{@channel_hash.size} table updates with actual time of #{tot_time} doing publishing"
+			log "Took #{Time.now - t} seconds to send #{num_sent} table updates with actual time of #{tot_time} doing publishing"
 		else #don't include the hands
 			@table_channel.publish(base_hash.to_json)
 			log "Took #{Time.now - t} seconds to send 1 table update"
@@ -138,18 +141,18 @@ class NetworkGame
 		@table.randomize_button
 		@table.randomize_seats
 		@started = true
-		#start_timer_thread
+		start_timer_thread
 		start_hand
 	end
 
 	def stop_timer_thread
-		@timer_loop_thread.kill if @timer_loop_thread
-		@timer_loop_thread = nil
+		@timer_thread_running = false
 	end
 
 	def start_timer_thread
-		@timer_loop_thread = Thread.new {
-			while true
+		@timer_thread_running = true
+		Thread.new {
+			while @timer_thread_running
 				sleep 5
 				should_force_move = false
 				@timer_mutex.synchronize do
@@ -178,10 +181,6 @@ class NetworkGame
 			@move_number += 1
 			@move_time_limit_info = {:move_number => @move_number, :need_move_by => (Time.now + tl)}
 		end
-	end
-
-	def kill_timer_thread
-		@timer_loop_thread.kill if @timer_loop_thread
 	end
 
 	def clear_timer
@@ -252,6 +251,7 @@ class NetworkGame
 					start_hand
 				else
 					@mutex.synchronize do
+						stop_timer_thread
 						@started = false
 					end
 				end
@@ -478,16 +478,6 @@ class Table
 		@small_blind *= multiplier
 	end
 
-	def pay_blinds
-		small = @seats[person_in_spot(@button + 1)]
-		big = @seats[person_in_spot(@button + 2)]
-		sb = small.bankroll > @small_blind ? @small_blind : small.bankroll
-		bb = big.bankroll > big_blind ? big_blind : big.bankroll
-		@pot += sb + bb
-		@current_bets[small] = small.make_bet(sb)
-		@current_bets[big] = big.make_bet(bb)
-	end
-
 	def randomize_button
 		@button = rand(@seats.size)
 	end
@@ -501,13 +491,13 @@ class Table
 	end
 
 	#Moves the current position
-	def move_position(num_spaces = 1)
+	def move_position(num_spaces = 1, for_blinds = false)
 		if num_spaces > 1
 			num_spaces.times { move_position }
 		else
 			@current_position = person_in_spot(@current_position + 1)
 			p = @seats[@current_position]
-			if @hands.size > @max_can_win.size
+			if !for_blinds and @hands.size > @max_can_win.size
 				move_position if !@hands.keys.include?(p) or @max_can_win.keys.include?(p)
 			end
 		end
@@ -529,7 +519,11 @@ class Table
 		@round_history = []
 		@players_at_start_of_hand = @hands.size - @max_can_win.size
 		@minimum_bet = big_blind
-		move_position(@phase == 0 ? 3 : 1) 
+		if @phase == 0
+			move_position(3, true)
+		else
+			move_position(1)
+		end
 		@phase += 1
 		@moves_taken = 0
 	end
@@ -551,7 +545,25 @@ class Table
 			end
 		end
 	end
-	
+
+	def pay_blinds
+		small = @seats[person_in_spot(@button + 1)]
+		big = @seats[person_in_spot(@button + 2)]
+		if small.bankroll > @small_blind
+			@current_bets[small] = small.make_bet(@small_blind)
+			@pot += @small_blind
+		else
+			go_all_in(small, true)
+		end
+		if big.bankroll > big_blind
+			@current_bets[big] = big.make_bet(big_blind)
+			@pot += big_blind
+			check_side_pots(big, big_blind, 0)
+		else
+			go_all_in(big, true)
+		end
+	end
+
 	def clear_bets
 		@current_bets = {}
 		@current_bet = 0
@@ -661,7 +673,7 @@ class Table
 	end
 
 	#Goes all in
-	def go_all_in(player)
+	def go_all_in(player, for_blinds = false)
 		current_player_bet = @current_bets[player] || 0
 		new_bet_amount = player.bankroll
 		all_in_amount = new_bet_amount + current_player_bet
@@ -679,8 +691,10 @@ class Table
 		@current_bet = all_in_amount if all_in_amount > @current_bet
 		check_side_pots(player, new_bet_amount, current_player_bet)
 		store_action('all-in', player, new_bet_amount)
-		move_position unless @max_can_win.size == @hands.size
-		@moves_taken += 1
+		unless for_blinds
+			move_position unless @max_can_win.size == @hands.size
+			@moves_taken += 1
+		end
 	end
 
 	def betting_complete?

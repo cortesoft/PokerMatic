@@ -221,8 +221,6 @@ class PokerClientBase
 	# Get a listing of all available tables
 	# @return [Array] An array of hashes describing each table
 	def get_all_tournaments
-		pp "Discovery:"
-		pp @discovery
 		tc = new_sub(@discovery['tournaments']['url'], @discovery['tournaments']['capability'])
 		tc.listen.map {|x| JSON.parse(x) rescue nil}.compact
 	end
