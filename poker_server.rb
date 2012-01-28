@@ -30,7 +30,7 @@ class PokerServer
 
 	def create_spire
 		t = Time.now
-		@spire = Spire.new#("http://build.spire.io")
+		@spire = Spire.new("http://build.spire.io")
 		puts "Took #{Time.now - t} seconds to do discovery"
 		t = Time.now
 		if !defined?(API_KEY) or !API_KEY

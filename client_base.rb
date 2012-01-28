@@ -23,7 +23,7 @@ class PokerClientBase
 	def initialize(discovery_url = nil, discovery_capability = nil)
 		@mutex = MutexTwo.new
 		@player_id = nil
-		@spire = Spire.new#("http://build.spire.io")
+		@spire = Spire.new("http://build.spire.io")
 		@table_channel = nil
 		@hand_hash = {}
 		discovery_url ||= get_discovery_url
@@ -159,14 +159,14 @@ class PokerClientBase
 			self.display_game_state(game_state) if self.respond_to?(:display_game_state)
 			if game_state.is_acting_player? and game_state.hand
 				begin
-					Timeout.timeout(game_state.timelimit) do
+					#Timeout.timeout(game_state.timelimit) do
 						move = ask_for_move(game_state)
 						move = 'fold' unless move
 						@player_channel.publish({'table_id' => game_state.table_id,
 						'command' => 'action', 'action' => move}.to_json)
-					end
-				rescue Timeout::Error
-					puts "Took too long to make a move, folding"
+					#end
+				#rescue Timeout::Error
+					#puts "Took too long to make a move, folding"
 				rescue
 					puts "Error: #{$!.inspect}"
 					pp $!.backtrace

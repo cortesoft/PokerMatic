@@ -77,8 +77,8 @@ class NetworkGame
 			add_players_from_queue
 			@hand_number += 1
 			@table.deal
-			set_timer
 			send_game_state(false, true)
+			set_timer
 		end
 	end
 
@@ -148,7 +148,7 @@ class NetworkGame
 		@table.randomize_button
 		@table.randomize_seats
 		@started = true
-		start_timer_thread
+		#start_timer_thread
 		start_hand
 	end
 
@@ -226,12 +226,12 @@ class NetworkGame
 	rescue
 		log "Rescued action error #{$!.inspect}"
 		log $!.backtrace.join("\n")
-		set_timer(@last_timer_limit / 2)
 		@channel_hash[player].publish({'type' => 'error', 'hand_number' => @hand_number,
 			'table_id' => @table_id, 'message' => $!.message}.to_json)
 		sleep 2
 		@mutex.synchronize do
 			send_game_state
+			set_timer(@last_timer_limit / 2)
 		end
 	end
 	
@@ -275,8 +275,8 @@ class NetworkGame
 			else
 				@mutex.synchronize do
 					send_game_state
+					set_timer
 				end
-				set_timer
 			end
 		end
 	end
