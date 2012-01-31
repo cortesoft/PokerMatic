@@ -82,44 +82,50 @@ class NetworkGame
 		end
 	end
 
-	def send_game_state(no_active = false, include_hands = false, skip_players = [])
+	def encrypt_hand(player, hand)
+		return hand unless player.public_key
+		ret = []
+		public_key_encrypter = OpenSSL::PKey::RSA.new(player.public_key)
+		hand.each do |card|
+			card_hash = {}
+			card.each do |key, value|
+				card_hash[key] = OpenPGP.enarmor(public_key_encrypter.public_encrypt(value.to_s))
+			end
+			ret << card_hash
+		end
+		ret
+	end
+
+	def merge_encrypted_hands(base_hash)
+		hands_hash = {}
+		@channel_hash.keys.each do |player|
+			next unless @table.queue.include?(player) or @table.seats.include?(player)
+			player_hash = {'player' => player.to_hash}
+			if !@table.queue.include?(player) and @table.hands[player]
+				hand = @table.hands[player].map {|x| x.to_hash}
+				player_hash.merge!({'hand' => encrypt_hand(player, hand), 'seat_number' => @table.player_position(player)})
+			end
+			hands_hash[player.player_id.to_s] = player_hash
+		end
+		base_hash.merge!('player_data' => hands_hash)
+	end
+
+	def send_game_state(no_active = false, include_hands = false)
 		base_hash = {'hand_number' => @hand_number, 'table_id' => @table.table_id,
 			'state' => @table.table_state_hash(no_active), 'type' => 'game_state'}
 		base_hash.merge!(@tourney_callback.call(self)) if @tourney_callback
+		merge_encrypted_hands(base_hash) if include_hands
 		t = Time.now
-		if include_hands
-			tot_time = 0
-			num_sent = 0
-			all_threads = []
-			@sgs_mutex = MutexTwo.new
-			@channel_hash.each do |player_o, channel_o|
-				next if skip_players.include?(player_o)
-				next unless @table.queue.include?(player_o) or @table.seats.include?(player_o)
-				all_threads << Thread.new(player_o, channel_o) {|player, channel|
-					player_hash = {'player' => player.to_hash}
-					if !@table.queue.include?(player) and @table.hands[player]
-						hand = @table.hands[player].map {|x| x.to_hash}
-						player_hash.merge!({'hand' => hand, 'seat_number' => @table.player_position(player)})
-					end
-					st = Time.now
-					channel.publish(base_hash.merge(player_hash).to_json)
-					@sgs_mutex.synchronize do
-						num_sent += 1
-						skip_players << player
-						tot_time += (Time.now - st)
-					end
-				}
-			end
-			all_threads.each {|th| th.join}
-			log "Took #{Time.now - t} seconds to send #{num_sent} table updates with actual time of #{tot_time} doing publishing"
-		else #don't include the hands
-			@table_channel.publish(base_hash.to_json)
-			log "Took #{Time.now - t} seconds to send 1 table update"
-		end
+		@table_channel.publish(base_hash.to_json)
+		log "Took #{Time.now - t} seconds to send 1 table update"
 	rescue Excon::Errors::SocketError
 		log "WARNING: Got a socket error #{$!} trying again"
 		sleep 1
-		send_game_state(no_active, include_hands, skip_players)
+		send_game_state(no_active, include_hands)
+	rescue
+		log "Got error sending game state: #{$!.inspect}"
+		log $!.backtrace, true
+		raise
 	end
 
 	def send_winner(winner_hash, hands)
@@ -148,7 +154,7 @@ class NetworkGame
 		@table.randomize_button
 		@table.randomize_seats
 		@started = true
-		#start_timer_thread
+		start_timer_thread
 		start_hand
 	end
 
@@ -345,11 +351,12 @@ class QuickGame
 end #class QuickGame
 
 class Player
-	attr_reader :bankroll, :name, :player_id
-	def initialize(name, player_id = nil, bankroll = 500)
+	attr_reader :bankroll, :name, :player_id, :public_key
+	def initialize(name, player_id = nil, bankroll = 500, pk = nil)
 		@bankroll = bankroll
 		@name = name
 		@player_id = player_id.to_i
+		@public_key = pk
 	end
 
 	def make_bet(amount)

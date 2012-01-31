@@ -138,6 +138,17 @@ class PokerClientBase
 		end
 	end
 
+	def decrypt_hand(encrypted_hand)
+		encrypted_hand.map do |card|
+			ret = {}
+			card.each do |key, value|
+				ret[key] = @encryption_keys.private_decrypt(OpenPGP.dearmor(value))
+				ret[key] = ret[key].to_i if key == "value"
+			end
+			ret
+		end
+	end
+
 	#Called whenever a new game state comes in
 	#Creates a GameState object, waits for the hand information to come in,
 	#and calls ask_for_move if it is the clients turn
@@ -145,11 +156,11 @@ class PokerClientBase
 	def game_state_update(parsed_state)
 		game_state = nil
 		@mutex.synchronize do
-			if parsed_state['hand']
-				@hand_hash[parsed_state['hand_number']] = parsed_state['hand']
-				hand = parsed_state['hand']
-				@seat_number = parsed_state['seat_number']
-				@bankroll = parsed_state['player']['bankroll']
+			if parsed_state['player_data'] and my_data = parsed_state['player_data'][@player_id.to_s]
+				hand = decrypt_hand(my_data['hand'])
+				@hand_hash[parsed_state['hand_number']] = hand
+				@seat_number = my_data['seat_number']
+				@bankroll = my_data['player']['bankroll']
 			else
 				hand = @hand_hash[parsed_state['hand_number']]
 			end

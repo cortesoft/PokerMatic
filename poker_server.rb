@@ -106,7 +106,7 @@ class PokerServer
 		log command, true
 		return unless command.has_key?('name') and command.has_key?('id')
 		pnum = get_next_player_number
-		p = Player.new(command['name'], pnum)
+		p = Player.new(command['name'], pnum, 500, command['public_key'])
 		channel = @spire["player_#{pnum}"]
 		sub = channel.subscribe#("player_sub_#{pnum}")
 		sub.add_listener("player_action") {|m| process_player_action(p, m)}
@@ -239,6 +239,9 @@ class PokerServer
 			return false unless table_data[:table].acting_player == player
 			table_data[:game].take_action(player, command['action'])
 		end
+	rescue
+		puts "ERROR TAKING TABLE ACTION: #{$!.inspect}"
+		pp $!.backtrace
 	end
 
 	def process_admin_command(m)
