@@ -1,10 +1,6 @@
-#!/usr/bin/env ruby
-require 'rubygems'
-require 'pp'
-require 'spire_io'
-require 'client_base'
+require File.expand_path("#{File.dirname(__FILE__)}/../shared_bot_code/bot_base.rb")
 
-class RandomClient < PokerClientBase
+class RandomBot < PokerBotBase
 	
 	def initialize
 		super
@@ -48,23 +44,5 @@ class RandomClient < PokerClientBase
 			curr_tot += value
 			return key if rval < curr_tot
 		end
-	end
-end
-
-if $PROGRAM_NAME == __FILE__
-	client = RandomClient.new
-	puts "User name?"
-	name = gets.chomp
-	client.create_user(name)
-	puts "Join a room or create a new one? 'join' or name of room"
-	if 'join' == (choice = gets.chomp)
-		client.join_table
-	else
-		puts "Number of players at the table?"
-		num = gets.chomp.to_i
-		client.create_table(choice, num)
-	end
-	while true
-		sleep 1000
 	end
 end

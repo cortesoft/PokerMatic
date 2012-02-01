@@ -1,9 +1,13 @@
-require 'config.rb' if File.exists?('config.rb')
+require 'rubygems'
 require 'pp'
 require 'timeout'
-require 'rubygems'
 require 'spire_io'
-require 'mutex_two'
+
+config_file_location = File.expand_path("#{File.dirname(__FILE__)}/../config.rb")
+require config_file_location if File.exists?(config_file_location)
+require File.expand_path("#{File.dirname(__FILE__)}/../utils/mutex_two.rb")
+require File.expand_path("#{File.dirname(__FILE__)}/../poker/poker.rb")
+
 if !defined?(USE_ENCRYPTION) or USE_ENCRYPTION
 	require 'openpgp'
 	require 'openssl'
@@ -11,13 +15,13 @@ else
 	USE_ENCRYPTION = false
 end
 
-#The PokerClientBase class contains all the code needed to create PokerServer clients
+#The PokerBotBase class contains all the code needed to create PokerServer clients
 #This class should be extended to create your own client; it will not work on its own
 #The only method absolutely needed for your client is ask_for_move, which is called every
 #time it is the client's turn to make a move.  It is passed a GameState object, which
 #is a representation of the current state of the game
 #NOTE: Make sure to call super on your subclass's initialize method
-class PokerClientBase
+class PokerBotBase
 	attr_accessor :player_id, :mutex, :name
 
 	def initialize(discovery_url = nil, discovery_capability = nil)
@@ -369,4 +373,4 @@ class PokerClientBase
 			end
 		end
 	end #class GameState
-end #Class PokerClientBase
+end #Class PokerBotBase

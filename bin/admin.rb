@@ -54,8 +54,10 @@ class PokerAdmin
 			{'capability' => capability, 'url' => url})
 	end
 end
-if File.exists?('config.rb')
-	require 'config.rb' 
+
+config_file_location = File.expand_path("#{File.dirname(__FILE__)}/../config.rb")
+if File.exists?(config_file_location)
+	require config_file_location
 	Admin = PokerAdmin.new(ADMIN_URL, ADMIN_CAPABILITY)
 	def ct
 		Admin.create_tournament

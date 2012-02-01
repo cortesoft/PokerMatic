@@ -1,9 +1,6 @@
-#!/usr/bin/env ruby
-require 'rubygems'
-require 'pp'
-require 'client_base'
+require File.expand_path("#{File.dirname(__FILE__)}/../shared_bot_code/bot_base.rb")
 
-class HumanClient < PokerClientBase
+class HumanClient < PokerBotBase
 	def initialize
 		super
 	end
@@ -121,28 +118,5 @@ class HumanClient < PokerClientBase
 
 	def print_board(board)
 		puts "| #{board.map {|x| x['string']}.join(" | ")} |"
-	end
-end
-
-if $PROGRAM_NAME == __FILE__
-	client = HumanClient.new
-	puts "User name?"
-	name = gets.chomp
-	client.create_user(name)
-	puts "Tournament or table? (1 = tournament, 2 = table)"
-	if gets.chomp.to_i == 1
-		client.join_tournament
-	else
-		puts "Join a room or create a new one? 'join' or name of room"
-		if 'join' == (choice = gets.chomp)
-			client.join_table
-		else
-			puts "Number of players at the table?"
-			num = gets.chomp.to_i
-			client.create_table(choice, num)
-		end
-	end
-	while true
-		sleep 1000
 	end
 end

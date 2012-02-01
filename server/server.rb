@@ -1,12 +1,17 @@
-#!/usr/bin/env ruby
-require 'config.rb'
 require 'rubygems'
-require 'poker.rb'
 require 'pp'
 require 'spire_io'
 require 'openssl'
 require 'openpgp'
-require 'mutex_two'
+["network_game", "quick_game", "tournament"].each do |fname|
+	require File.expand_path("#{File.dirname(__FILE__)}/#{fname}.rb")
+end
+
+config_file_location = File.expand_path("#{File.dirname(__FILE__)}/../config.rb")
+require config_file_location if File.exists?(config_file_location)
+
+require File.expand_path("#{File.dirname(__FILE__)}/../poker/poker.rb")
+require File.expand_path("#{File.dirname(__FILE__)}/../utils/mutex_two.rb")
 
 class PokerServer
 	attr_reader :discovery_url, :discovery_capability, :admin_url, :admin_capability, :spire
@@ -270,16 +275,3 @@ class PokerServer
 		log "Tournament created"
 	end
 end #class PokerServer
-
-if $PROGRAM_NAME == __FILE__
-	puts "Starting up server"
-	s = PokerServer.new
-	puts "Server running:"
-	puts "DISCOVERY_URL = '#{s.discovery_url}'"
-	puts "DISCOVERY_CAPABILITY = '#{s.discovery_capability}'"
-	puts "ADMIN_URL = '#{s.admin_url}'"
-	puts "ADMIN_CAPABILITY = '#{s.admin_capability}'"
-	while true
-		sleep 1000
-	end
-end
