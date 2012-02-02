@@ -38,7 +38,7 @@ The only thing clients will need are the two values URL and capability that are 
 
 Here is an example output when a server starts up:
 
-pre. >$ ./poker_server.rb
+pre. >$ bin/poker_server.rb
 Starting up server
 Creating new account
 Server running:
@@ -59,7 +59,7 @@ table or a tournament.
 
 Here is an example from bin/bot:
 
-pre. >$ ./bot
+pre. >$ bin/bot
 Choose a bot:
 1: AllInBot
 2: HumanClient
