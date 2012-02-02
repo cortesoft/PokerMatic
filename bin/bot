@@ -23,11 +23,11 @@ puts "Tournament or table? (1 = tournament, 2 = table)"
 if gets.chomp.to_i == 1
 	client.join_tournament
 else
-	puts "Join a room or create a new one? 'join' or name of room"
+	puts "Join an existing room or create a new one? type 'join' to join an existing room or the name of a room to create a new one"
 	if 'join' == (choice = gets.chomp)
 		client.join_table
 	else
-		puts "Number of players at the table?"
+		puts "Number of players to wait for before starting the table"
 		num = gets.chomp.to_i
 		client.create_table(choice, num)
 	end

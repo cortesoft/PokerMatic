@@ -3,6 +3,7 @@ NAMES = ['Abe', 'Ben', 'Cal', 'Dave', 'Ernie', 'Frank', 'Gary', 'Herb', 'Irvin',
 	'Kevin', 'Lenny', 'Mike', 'Nate', 'Oren', 'Pat', 'Quin', 'Rod', 'Sam', 'Tom', 'Ursala',
 	'Vince', 'Will', 'Xavier', 'Zed', 'Alice', 'Betty', 'Carla', 'Daisy', 'Eunice', 'Fern',
 	'Gertrude', 'Harriet', 'Ivy', 'Jill', 'Kelly', 'Leslie', 'Mindy', 'Nelly', 'Ophilia']
+SKIP_BOTS = ["HumanClient"]
 
 require File.expand_path("#{File.dirname(__FILE__)}/../shared_bot_code/bot_loader.rb")
 bl = BotLoader.new
@@ -12,8 +13,12 @@ nums = {}
 names = NAMES.shuffle + NAMES.shuffle + NAMES.shuffle
 
 bl.bot_classes.each do |klass|
-	puts "How many #{klass} clients?"
-	nums[klass] = gets.chomp.to_i
+	if SKIP_BOTS.include?(klass.to_s)
+		nums[klass] = 0
+	else
+		puts "How many #{klass} clients?"
+		nums[klass] = gets.chomp.to_i
+	end
 end
 bl.bot_map.each do |klass, class_name|
 	nums[klass].times do

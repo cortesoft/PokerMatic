@@ -34,10 +34,7 @@ class PokerServer
 	end
 
 	def create_spire
-		t = Time.now
 		@spire = Spire.new("http://build.spire.io")
-		puts "Took #{Time.now - t} seconds to do discovery"
-		t = Time.now
 		if !defined?(API_KEY) or !API_KEY
 			puts "Creating new account"
 			@spire.register(:email => "poker#{@player_number}@spire.io", :password => "#{rand(9999999999)}dageg")
@@ -45,12 +42,11 @@ class PokerServer
 			api_key = API_KEY
 			@spire.start(api_key)
 		end
-		puts "Took #{Time.now - t} seconds to start spire session"
 	end
 
 	def create_admin_channels
 		@admin = @spire['admin']
-		@admin_sub = @admin.subscribe#("admin_sub_#{@player_number}")
+		@admin_sub = @admin.subscribe("admin_sub_#{@player_number}")
 		@admin_sub.last = (Time.now.to_i * 1000)
 		@admin_sub.add_listener("admin_sub") {|m| process_admin_command(m)}
 		@admin_sub.start_listening
@@ -81,11 +77,11 @@ class PokerServer
 	end
 
 	def setup_listeners
-		@registration_sub = @registration.subscribe#("reg_sub_#{@player_number}")
+		@registration_sub = @registration.subscribe("reg_sub_#{@player_number}")
 		@registration_sub.last = (Time.now.to_i * 1000)
 		@registration_sub.add_listener('reg_sub') {|m| process_registration(m)}
 		@registration_sub.start_listening
-		@create_table_sub = @create_table_channel.subscribe#("c_table_sub_#{@player_number}")
+		@create_table_sub = @create_table_channel.subscribe("c_table_sub_#{@player_number}")
 		@create_table_sub.add_listener('create_table') {|m| process_create_table(m)}
 		@create_table_sub.start_listening
 	end
@@ -113,11 +109,11 @@ class PokerServer
 		pnum = get_next_player_number
 		p = Player.new(command['name'], pnum, 500, command['public_key'])
 		channel = @spire["player_#{pnum}"]
-		sub = channel.subscribe#("player_sub_#{pnum}")
+		sub = channel.subscribe("player_sub_#{pnum}")
 		sub.add_listener("player_action") {|m| process_player_action(p, m)}
 		sub.start_listening
 		player_response = @spire["player_response_#{pnum}"]
-		pr_sub = player_response.subscribe#("player_response_sub_#{pnum}")
+		pr_sub = player_response.subscribe("player_response_sub_#{pnum}")
 		@mutex.synchronize do
 			@players[pnum] = {:player => p, :id => pnum,
 				:channel => channel, :subscription => sub, :response_channel => player_response,
@@ -155,7 +151,7 @@ class PokerServer
 			table = Table.new(blinds, next_table_number)
 			game = NetworkGame.new(table, min_players, @log_mutex)
 			channel = @spire["table_#{next_table_number}"]
-			sub = channel.subscribe#("sub_table_#{next_table_number}")
+			sub = channel.subscribe("sub_table_#{next_table_number}")
 			game.set_table_channel(channel)
 			@tables[next_table_number] = {:table => table, :min_players => min_players,
 				:game => game, :name => command['name'], :mutex => MutexTwo.new, :channel => channel,
@@ -176,7 +172,7 @@ class PokerServer
 	def register_table(table, network_game)
 		log "Registering table #{table.table_id} with the server"
 		channel = @spire["table_#{table.table_id}"]
-		sub = channel.subscribe#("sub_table_#{table.table_id}")
+		sub = channel.subscribe("sub_table_#{table.table_id}")
 		hsh = {:table => table, :min_players => 2,
 				:game => network_game, :name => "Table #{table.table_id}", :mutex => MutexTwo.new,
 				:channel => channel, :subscription => sub}

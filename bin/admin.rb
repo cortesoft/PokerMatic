@@ -29,10 +29,15 @@ class PokerAdmin
 		base_time += 60
 		hsh = {}
 		opt_num = 1
-		10.times do |n|
+		15.times do |n|
 			puts "#{opt_num}: #{base_time}"
 			hsh[opt_num] = base_time
-			base_time += n >= 5 ? 300 : 60
+			increment = case n
+				when 0...5 then 60
+				when 0...10 then 300
+				when 10..15 then 3600
+			end
+			base_time += increment
 			opt_num += 1
 		end
 		puts "Time?"
