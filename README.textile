@@ -10,7 +10,7 @@ Both the PokerServer and PokerBots require the same following dependencies:
 
 * JRuby is recommended for threading performance
 ** http://jruby.org/download
-** If you choose not to use jruby, you will need to change the shebang line in the bin files
+** *If you choose not to use jruby, you will need to change the shebang line in the bin files*
 * Install the spire.io.rb gem (https://github.com/spire-io/spire.io.rb)
 ** jgem install spire_io --pre
 * Install OpenPGP
@@ -19,7 +19,7 @@ Both the PokerServer and PokerBots require the same following dependencies:
 h2. Setting up your config file
 
 Both the server and client libraries read their settings from a file *config.rb*.  Make a copy
-of *config_example.rb* and name it *config.rb*.
+of *config_example.rb* and name it *config.rb* in the root directory of PokerMatic.
 
 To run a server, the only value that you may want to set is *API_KEY*  This should be your spire.io
 API key.  (You can sign up for a spire.io account at http://www.spire.io/register.html)  If you don't
@@ -38,13 +38,20 @@ The only thing clients will need are the two values URL and capability that are 
 
 Here is an example output when a server starts up:
 
-@ > $ ./poker_server.rb
+@> $ ./poker_server.rb
+
 Starting up server
+
 Creating new account
+
 Server running:
+
 DISCOVERY_URL = 'http://build.spire.io/account/Ac-hageahljahe-wwA/subscription/Su-agea'
+
 DISCOVERY_CAPABILITY = 'jbpE5zzOJ_KDAGEOmJgw'
+
 ADMIN_URL = 'http://build.spire.io/account/Ac-hageahljahe-wwA/channel/Ch-hkxiz'
+
 ADMIN_CAPABILITY = 'EjslMULKXOZExHuQ0A'@
 
 *Simply copy the last 4 lines that are outputted into your config.rb file*
@@ -60,16 +67,27 @@ table or a tournament.
 Here is an example from bin/bot:
 
 @$ ./bot
+
 Choose a bot:
+
 1: AllInBot
+
 2: HumanClient
+
 3: RandomBot
+
 4: SmartBot
+
 5: SuperSteadyBot
+
 Choose a bot class:
+
 > 2
+
 Player name?
+
 > Daniel
+
 Tournament or table? (1 = tournament, 2 = table)@
 
 h2. Creating and joining a table
@@ -77,10 +95,15 @@ h2. Creating and joining a table
 With both bin/bot and bin/bot_cluster, after the bots are created you will be given the option to create or join a table:
 
 @Tournament or table? (1 = tournament, 2 = table)
+
 > 2
+
 Join an existing room or create a new one? type 'join' to join an existing room or the name of a room to create a new one
+
 > Awesome
+
 Number of players to wait for before starting the table?
+
 > 5@
 
 This will create a table named 'Awesome' that will start once 5 people have joined
@@ -88,11 +111,17 @@ This will create a table named 'Awesome' that will start once 5 people have join
 To join an existing table the process goes like this:
 
 @Tournament or table? (1 = tournament, 2 = table)
+
 > 2
+
 Join an existing room or create a new one? type 'join' to join an existing room or the name of a room to create a new one
+
 > join
+
 Table 1: Awesome Blinds 1 Min Players 5
+
 Join which table?
+
 > 1@
 
 The bot will now join that table and wait for the table to start.
@@ -103,33 +132,61 @@ A PokerMatic tournament allows you to run a multi-table tournament with many bot
 code will take care of splitting players into tables of 10, rebalancing tables as players are eliminated, and also keep track
 of blind increases over time.  The tournament is over when only one bot remains!
 
-To create a tournament, you need to use the admin tool.  The easiest way to use it is from IRB.
+To create a tournament, you need to use the admin tool. First make sure you have set your *ADMIN_URL* and *ADMIN_CAPABILITY*
+in config.rb to match the server you are trying to connect to.
+
+The easiest way to use it is from IRB.
 
 @$> irb
+
 > require 'bin/admin'
+
 > Admin.create_tournament
+
 Tournament name?
+
 > Awesome Tournament
+
 1: Wed Feb 01 17:20:00 -0800 2012
+
 2: Wed Feb 01 17:21:00 -0800 2012
+
 3: Wed Feb 01 17:22:00 -0800 2012
+
 4: Wed Feb 01 17:23:00 -0800 2012
+
 5: Wed Feb 01 17:24:00 -0800 2012
+
 6: Wed Feb 01 17:25:00 -0800 2012
+
 7: Wed Feb 01 17:30:00 -0800 2012
+
 8: Wed Feb 01 17:35:00 -0800 2012
+
 9: Wed Feb 01 17:40:00 -0800 2012
+
 10: Wed Feb 01 17:45:00 -0800 2012
+
 11: Wed Feb 01 17:50:00 -0800 2012
+
 12: Wed Feb 01 18:50:00 -0800 2012
+
 13: Wed Feb 01 19:50:00 -0800 2012
+
 14: Wed Feb 01 20:50:00 -0800 2012
+
 15: Wed Feb 01 21:50:00 -0800 2012
+
 Time?
+
 > 3
+
 Starting Blinds?
+
 > 1
+
 Increase blinds every how many seconds?
+
 > 600@
 
 This will create a tournament that starts at 5:22 PM with blinds starting at 1 and increasing every 10 minutes.
@@ -137,10 +194,14 @@ This will create a tournament that starts at 5:22 PM with blinds starting at 1 a
 To join the tournament with a bot:
 
 @Tournament or table? (1 = tournament, 2 = table)
+
 > 1
+
 Tourney 1: Awesome Tournament Starting at Wed Feb 01 17:22:00 -0800 2012
+
 Join which tourney?
-> 1
+
+> 1@
 
 The bot will automatically be assigned to a table when the tournament starts.
 
