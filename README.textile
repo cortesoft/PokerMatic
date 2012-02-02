@@ -1,8 +1,8 @@
 h1. PokerMatic
 
-PokerMatic consists of two parts; a server and a set of client libraries.  The server can be thought of
+PokerMatic consists of two parts; a server and a set of bot libraries.  The server can be thought of
 as the virtual poker hall; it is in charge of setting up tables, giving chips to players, and dealing the cards.
-The client libraries can be thought of as the virtual poker players, playing at tables hosted by the server.
+The bot libraries can be thought of as the virtual poker players, playing at tables hosted by the server.
 
 h2. Setting up the dependencies
 
