@@ -3,7 +3,7 @@ module PokerMatic
 class Table
 	attr_reader :board, :button, :phase, :seats, :pot, :current_bet,
 		:minimum_bet, :current_bets, :hands, :table_id
-	attr_accessor :timelimit, :queue, :small_blind
+	attr_accessor :timelimit, :queue, :small_blind, :ante
 
 	PHASES = ['New Hand', 'Pre-Flop', 'Flop', 'Turn', 'River']
 	def initialize(sb = 1, table_id = nil)
@@ -14,6 +14,7 @@ class Table
 		@hands = {}
 		@board = []
 		@phase = 0
+		@ante = 0
 		@timelimit = 30
 		@small_blind = sb
 		@table_id = table_id
@@ -53,6 +54,7 @@ class Table
 			'button' => @button,
 			'pot' => @pot,
 			'big_blind' => big_blind, 
+			'ante' => @ante,
 			'current_bet' => @current_bet,
 			'minimum_bet' => @minimum_bet,
 			'players' => @seats.map {|p| p.to_hash},
@@ -181,7 +183,16 @@ class Table
 		end
 	end
 
+	def pay_ante
+		return unless @ante > 0
+		@seats.each do |player|
+			ante_amount = player.bankroll <= (@ante - 1) ? player.bankroll - 1 : @ante
+			@pot += player.make_bet(ante_amount)
+		end
+	end
+
 	def pay_blinds
+		pay_ante
 		small = @seats[person_in_spot(@button + 1)]
 		big = @seats[person_in_spot(@button + 2)]
 		if small.bankroll > @small_blind

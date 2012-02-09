@@ -52,8 +52,8 @@ p. *Simply copy the last 4 lines that are outputted into your config.rb file*
 h2. Connecting a bot to the server
 
 You then have two ways to run a bot; as a single bot by running bin/bot or as a cluster of bots by running bin/bot_cluster.
-First make sure you have set your DISCOVERY_URL and DISCOVERY_CAPABILITY in config.rb to match the server you are trying to connect
-to, and then run either bin/bot or bin/bot_cluster; bin/bot will ask you which class of bot you want to run, while bin/bot_cluster
+First make sure you have set your DISCOVERY_URL and DISCOVERY_CAPABILITY in config.rb to match the server you are trying to
+connect to, and then run either bin/bot or bin/bot_cluster; bin/bot will ask you which class of bot you want to run, while bin/bot_cluster
 will ask how many bots of each class you want to run.  After the bots are created, you will be given the choice to either join a
 table or a tournament.
 

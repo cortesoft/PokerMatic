@@ -5,6 +5,9 @@ require 'spire_io'
 
 config_file_location = File.expand_path("#{File.dirname(__FILE__)}/../config.rb")
 require config_file_location if File.exists?(config_file_location)
+unless defined?(API_URL)
+	API_URL = "https://api.spire.io"
+end
 require File.expand_path("#{File.dirname(__FILE__)}/../utils/mutex_two.rb")
 require File.expand_path("#{File.dirname(__FILE__)}/../poker/poker.rb")
 
@@ -27,7 +30,7 @@ class PokerBotBase
 	def initialize(discovery_url = nil, discovery_capability = nil)
 		@mutex = MutexTwo.new
 		@player_id = nil
-		@spire = Spire.new("http://build.spire.io")
+		@spire = Spire.new(API_URL)
 		@table_channel = nil
 		@hand_hash = {}
 		discovery_url ||= get_discovery_url
@@ -174,8 +177,7 @@ class PokerBotBase
 					#Timeout.timeout(game_state.timelimit) do
 						move = ask_for_move(game_state)
 						move = 'fold' unless move
-						@player_channel.publish({'table_id' => game_state.table_id,
-						'command' => 'action', 'action' => move}.to_json)
+						make_move(game_state, move)
 					#end
 				#rescue Timeout::Error
 					#puts "Took too long to make a move, folding"
@@ -185,6 +187,15 @@ class PokerBotBase
 				end
 			end
 		end
+	end
+
+	def make_move(game_state, move)
+		@player_channel.publish({'table_id' => game_state.table_id,
+			'command' => 'action', 'action' => move}.to_json)
+	rescue Excon::Errors::SocketError
+		puts "Excon error #{$!.inspect}"
+		sleep 1
+		make_move(game_state, move)
 	end
 
 	#Called when the client makes an invalid move

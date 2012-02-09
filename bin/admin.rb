@@ -4,8 +4,8 @@ require 'rubygems'
 require 'spire_io'
 
 class PokerAdmin
-	def initialize(admin_url = nil, admin_capability = nil)
-		@spire = Spire.new("http://build.spire.io")
+	def initialize(admin_url, admin_capability, api_url)
+		@spire = Spire.new(api_url)
 		@admin_channel = new_channel(admin_url, admin_capability)
 	end
 
@@ -63,7 +63,10 @@ end
 config_file_location = File.expand_path("#{File.dirname(__FILE__)}/../config.rb")
 if File.exists?(config_file_location)
 	require config_file_location
-	Admin = PokerAdmin.new(ADMIN_URL, ADMIN_CAPABILITY)
+	unless defined?(API_URL)
+		API_URL = "https://api.spire.io"
+	end
+	Admin = PokerAdmin.new(ADMIN_URL, ADMIN_CAPABILITY, API_URL)
 	def ct
 		Admin.create_tournament
 	end

@@ -1,18 +1,22 @@
 module PokerMatic
 class Tournament
 	attr_reader :start_time
+
+	BLIND_LEVELS = [1, 2, 3, 4, 4, 6, 8, 12, 16, 20,
+		24, 32, 40, 60, 80, 120, 160, 240, 320, 400, 500]
+	ANTE_LEVELS = [0,0,0,0,1,1,2,3,4,4,8,8,12,20,20,40,40,40,80,100,100,100,125,150]
+
 	# :start_time, :log_mutex, :time_limit, :small_blind, :blind_timer, :start_chips
 	# :tourney_id, :name, :server, :no_timer
-
 	def initialize(opts = {})
 		@server = opts[:server]
 		@start_time = opts[:start_time] || Time.now + 600
 		@log_mutex = opts[:log_mutex] || MutexTwo.new
 		@tourney_id = opts[:tourney_id] || rand(9999999)
 		@timelimit = opts[:time_limit] || 30
-		@small_blind = opts[:small_blind] || 1
+		@small_blind = opts[:small_blind] || 25
 		@blind_timer = opts[:blind_timer] || 300
-		@start_chips = opts[:start_chips] || 1000
+		@start_chips = opts[:start_chips] || 4000
 		@name = opts[:name] || "Tourney #{@tourney_id}"
 		@players = []
 		@network_games = []
@@ -235,19 +239,34 @@ class Tournament
 				log "#{place}. #{p.name}"
 				place += 1
 			end
+			Stats.record_stats_if_configured(@finish_order + [winner])
 		end
 	end
 
-	def current_small_blind
+	def current_level
 		elapsed = (Time.now - @start_time).to_i
-		num_levels = (elapsed / @blind_timer)
-		sb = @small_blind * (2 ** num_levels)
-		log "#{elapsed} seconds have gone by, so the level is #{num_levels}, blind timer is #{@blind_timer} with blind is now at #{sb}"
+		elapsed / @blind_timer
+	end
+
+	def current_small_blind
+		l = current_level
+		multiplier = l > BLIND_LEVELS.size ? BLIND_LEVELS.last : BLIND_LEVELS[l]
+		sb = @small_blind * multiplier
+		log "#{(Time.now - @start_time).to_i} seconds have gone by, so the level is #{l}, blind timer is #{@blind_timer} with blind is now at #{sb}"
 		sb
+	end
+
+	def current_ante
+		l = current_level
+		multiplier = l > ANTE_LEVELS.size ? ANTE_LEVELS.last : ANTE_LEVELS[l]
+		ante = @small_blind * multiplier
+		log "#{(Time.now - @start_time).to_i} seconds have gone by, so the level is #{l}, blind timer is #{@blind_timer} with ante is now at #{ante}"
+		ante
 	end
 
 	def set_blind_levels(network_game)
 		network_game.table.small_blind = current_small_blind
+		network_game.table.ante = current_ante
 	end
 
 	def tourney_stats(table)

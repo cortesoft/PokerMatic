@@ -105,6 +105,7 @@ class HumanClient < PokerBotBase
 			puts "Finish order: #{td['finished'].join(', ')}"
 		end
 		puts "Hand number #{data['hand_number']}"
+		puts "Big Blind: #{data['big_blind']} Ante: #{data['ante']}"
 		puts state['phase_name']
 		puts "Pot #{state['pot']} Current Bet #{state['current_bet']}"
 		puts "Board:"

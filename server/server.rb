@@ -9,9 +9,13 @@ end
 
 config_file_location = File.expand_path("#{File.dirname(__FILE__)}/../config.rb")
 require config_file_location if File.exists?(config_file_location)
+unless defined?(API_URL)
+	API_URL = "https://api.spire.io"
+end
 
 require File.expand_path("#{File.dirname(__FILE__)}/../poker/poker.rb")
 require File.expand_path("#{File.dirname(__FILE__)}/../utils/mutex_two.rb")
+require File.expand_path("#{File.dirname(__FILE__)}/../utils/stats.rb")
 
 class PokerServer
 	attr_reader :discovery_url, :discovery_capability, :admin_url, :admin_capability, :spire
@@ -257,12 +261,14 @@ class PokerServer
 	def create_tournament(command)
 		tourney_number = get_next_table_number
 		name = command['name'] || "Tourney #{tourney_number}"
-		starting_blinds = command['starting_blinds'] || 1
+		starting_blinds = command['starting_blinds'] || 25
 		start_time = command['start_time'] ? Time.at(command['start_time']) : Time.now + 600
 		blind_timer = command['blind_timer'] || 300
+		start_chips = command['start_chips'] || 4000
 		tourney = Tournament.new(:server => self, :log_mutex => @log_mutex,
 			:tourney_id => tourney_number, :small_blind => starting_blinds,
-			:blind_timer => blind_timer, :name => name, :start_time => start_time)
+			:blind_timer => blind_timer, :name => name, :start_time => start_time,
+			:start_chips => start_chips)
 		@mutex.synchronize do
 			@tournaments[tourney_number] = tourney
 			@tournaments_channel.publish({'name' => name, 'starting_time' => start_time.to_i,
