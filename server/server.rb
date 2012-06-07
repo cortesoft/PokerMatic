@@ -3,6 +3,7 @@ require 'pp'
 require 'spire_io'
 require 'openssl'
 require 'openpgp'
+
 ["network_game", "quick_game", "tournament"].each do |fname|
 	require File.expand_path("#{File.dirname(__FILE__)}/#{fname}.rb")
 end
@@ -12,13 +13,16 @@ require config_file_location if File.exists?(config_file_location)
 unless defined?(API_URL)
 	API_URL = "https://api.spire.io"
 end
+unless defined?(APP_NAME)
+  APP_NAME = "PokerMatic"
+end
 
 require File.expand_path("#{File.dirname(__FILE__)}/../poker/poker.rb")
 require File.expand_path("#{File.dirname(__FILE__)}/../utils/mutex_two.rb")
 require File.expand_path("#{File.dirname(__FILE__)}/../utils/stats.rb")
 
 class PokerServer
-	attr_reader :discovery_url, :discovery_capability, :admin_url, :admin_capability, :spire
+	attr_reader :app_key, :spire
 
 	include PokerMatic
 	
@@ -38,55 +42,107 @@ class PokerServer
 	end
 
 	def create_spire
-		@spire = Spire.new("http://build.spire.io")
-		if !defined?(API_KEY) or !API_KEY
-			puts "Creating new account"
-			@spire.register(:email => "poker#{@player_number}@spire.io", :password => "#{rand(9999999999)}dageg")
-		else
-			api_key = API_KEY
-			@spire.start(api_key)
-		end
+		@spire = Spire.new(API_URL)
+    login_server_account rescue create_server_account
+    find_or_create_application
 	end
 
+  def login_server_account
+    check_for_missing_configs
+    @session = @spire.login(SPIRE_EMAIL, SPIRE_PASSWORD).session
+  end
+
+  def create_server_account
+    @session = @spire.register(:email => SPIRE_EMAIL, :password => SPIRE_PASSWORD).session
+  end
+
+  def check_for_missing_configs
+    missing_configs = []
+    ['SPIRE_EMAIL', 'SPIRE_PASSWORD'].each do |c|
+      if !(Kernel.const_get(c) rescue false)
+        missing_configs << c
+      end
+    end
+    if missing_configs.size > 0
+      raise "Please define #{missing_configs.join(" and ")} in your config.rb file"
+    end
+  end
+
+  def find_or_create_application
+    @application = @session.find_or_create_application(APP_NAME)
+    @app_key = @application.key
+    create_server_member rescue login_server_member
+  end
+
+  def create_server_member
+    @server_member = @application.create_member(:login => "Admin", :password => SPIRE_PASSWORD)
+  end
+
+  def login_server_member
+    @server_member = @application.authenticate("Admin", SPIRE_PASSWORD)
+  end
+
 	def create_admin_channels
-		@admin = @spire['admin']
-		@admin_sub = @admin.subscribe("admin_sub_#{@player_number}")
+		@admin = get_channel('admin')
+		@admin_sub = @admin.subscribe
 		@admin_sub.last = (Time.now.to_i * 1000)
-		@admin_sub.add_listener("admin_sub") {|m| process_admin_command(m)}
+		@admin_sub.add_listener('message', "admin_sub") {|m| process_admin_command(m.content)}
 		@admin_sub.start_listening
-		@admin_url = @admin.url
-		@admin_capability = @admin.capability
+    profile = @server_member['profile']
+    profile['admin'] = {
+      'url' => @admin.url,
+      'capabilities' => @admin.capabilities
+    }
+    profile['player_ids'] ||= {}
+		@server_member.update(:profile => profile)
 	end
 
 	def create_channels
-		@discovery = @spire["discovery_#{@player_number}"]
-		@tables_channel = @spire["tables_#{@player_number}"]
-		@registration = @spire['registration']
-		@registration_response = @spire["registration_response_#{@player_number}"]
-		@create_table_channel = @spire['create_table']
-		@tournaments_channel = @spire["tournaments_#{@player_number}"]
+		@tables_channel = get_channel("tables")
+		@registration = get_channel('registration')
+		@registration_response = get_channel("registration_response")
+		@create_table_channel = get_channel('create_table')
+		@tournaments_channel = get_channel("tournaments")
 		payload = {}
-		[['tables', @tables_channel.subscribe],
-		['registration', @registration],
-		['create_table', @create_table_channel],
-		['registration_response', @registration_response.subscribe],
-		['tournaments', @tournaments_channel.subscribe]].each do |key, channel|
-			payload[key] = {'url' => channel.url, 'capability' => channel.capability}
+		[['tables', @tables_channel.subscribe, 'events'],
+		['registration', @registration, 'publish'],
+		['create_table', @create_table_channel, 'publish'],
+		['registration_response', @registration_response.subscribe, 'events'],
+		['tournaments', @tournaments_channel.subscribe, 'events']].each do |key, resource, cap|
+			payload[key] = {
+        'url' => resource.url, 
+        'capabilities' => {cap => resource.capabilities[cap]}
+      }
 		end
-		@discovery.publish(payload.to_json)
-		@dsub = @discovery.subscribe
+		set_default_profile(payload)
 		setup_listeners
-		@discovery_url = @dsub.url
-		@discovery_capability = @dsub.capability
 	end
 
+  def set_default_profile(default_profile)
+    @discovery = default_profile
+    @application.update(:default_profile => default_profile)
+  end
+
 	def setup_listeners
-		@registration_sub = @registration.subscribe("reg_sub_#{@player_number}")
+		@registration_sub = @registration.subscribe
 		@registration_sub.last = (Time.now.to_i * 1000)
-		@registration_sub.add_listener('reg_sub') {|m| process_registration(m)}
+		@registration_sub.add_listener('message', 'reg_sub') {|m|
+      begin
+        process_registration(m.content)
+      rescue
+        log "ERROR in registration: #{$!.inspect}"
+      end
+    }
 		@registration_sub.start_listening
-		@create_table_sub = @create_table_channel.subscribe("c_table_sub_#{@player_number}")
-		@create_table_sub.add_listener('create_table') {|m| process_create_table(m)}
+		@create_table_sub = @create_table_channel.subscribe
+		@create_table_sub.add_listener('message', 'create_table') {|m|
+      begin
+        process_create_table(m.content)
+      rescue
+        log "ERROR in creating table #{$!.inspect}"
+        log $!.backtrace, true
+      end
+    }
 		@create_table_sub.start_listening
 	end
 
@@ -97,37 +153,72 @@ class PokerServer
 		end
 	end
 
-	def get_next_player_number
+	def get_next_player_number(member = nil)
+    if member && id = @server_member['profile']['player_ids'][member['login']]
+      log "Got member id from my own profile"
+      return id
+    end
+    log "Mutexing"
 		@mutex.synchronize do
 			@player_number += 1
 			@player_number
+      if member
+        log "Preparing Updating member"
+        profile = @server_member['profile']
+        profile['player_ids'][member['login']] = @player_number
+        log "updating member"
+        log profile, true
+        @server_member.update(:profile => profile)
+      end
+      log "Updated"
+      @player_number
 		end
 	end
+
+  def store_player_in_member_profile(player_hash)
+    #TODO This
+  end
 
 	#Process a request to register a user from the registration channel
 	def process_registration(message)
 		command = JSON.parse(message)
 		log 'Creating player with attributes:'
 		log command, true
-		return unless command.has_key?('name') and command.has_key?('id')
-		pnum = get_next_player_number
-		p = Player.new(command['name'], pnum, 500, command['public_key'])
-		channel = @spire["player_#{pnum}"]
-		sub = channel.subscribe("player_sub_#{pnum}")
-		sub.add_listener("player_action") {|m| process_player_action(p, m)}
+		return unless command.has_key?('login') and command.has_key?('id')
+    member = @application.get_member(command['login']) rescue nil
+    if !member
+      log "Could not find a member with the login #{command['login']}"
+      resp_hash = {'command_id' => command['id'], 'status' => 'failed'}
+      @registration_response.publish(resp_hash.to_json)
+      return
+    end
+		pnum = get_next_player_number(member)
+		p = Player.new(command['login'], pnum, 500, command['public_key'])
+    profile = member['profile']
+		channel = get_channel("player_#{pnum}")
+		sub = channel.subscribe
+		sub.add_listener('message', "player_action") {|m| process_player_action(p, m.content)}
 		sub.start_listening
-		player_response = @spire["player_response_#{pnum}"]
-		pr_sub = player_response.subscribe("player_response_sub_#{pnum}")
+		player_response = get_channel("player_response_#{pnum}")
+		pr_sub = player_response.subscribe
+    player_hash = {:player => p, :id => pnum,
+        :channel => channel, :subscription => sub, :response_channel => player_response,
+        :response_sub => pr_sub}
 		@mutex.synchronize do
-			@players[pnum] = {:player => p, :id => pnum,
-				:channel => channel, :subscription => sub, :response_channel => player_response,
-				:response_sub => pr_sub}
-		end
-		resp_hash = {'command_id' => command['id'],
-			'url' => channel.url, 'capability' => channel.capability,
-			'response_url' => pr_sub.url, 'player_id' => pnum,
-			'response_capability' => pr_sub.capability}
-		encrypt_capabilities(resp_hash, command['public_key']) if command['public_key']
+			@players[pnum] = player_hash
+    end
+    store_player_in_member_profile(player_hash)
+    profile['player_channel'] = {
+      'url' => channel.url,
+      'capabilities' => channel.capabilities
+    }
+    profile['player_response'] = {
+      'url' => pr_sub.url,
+      'capabilities' => pr_sub.capabilities
+    }
+    profile = profile.merge(@discovery)
+    member.update(:profile => profile)
+		resp_hash = {'command_id' => command['id'], 'player_id' => pnum, 'status' => 'registered'}
 		@registration_response.publish(resp_hash.to_json)
 	end #def process_registration
 
@@ -154,7 +245,7 @@ class PokerServer
 			blinds = (command['blinds'] || 1).to_i
 			table = Table.new(blinds, next_table_number)
 			game = NetworkGame.new(table, min_players, @log_mutex)
-			channel = @spire["table_#{next_table_number}"]
+			channel = get_channel("table_#{next_table_number}")
 			sub = channel.subscribe("sub_table_#{next_table_number}")
 			game.set_table_channel(channel)
 			@tables[next_table_number] = {:table => table, :min_players => min_players,
@@ -175,7 +266,7 @@ class PokerServer
 	#called by the tournament code
 	def register_table(table, network_game)
 		log "Registering table #{table.table_id} with the server"
-		channel = @spire["table_#{table.table_id}"]
+		channel = get_channel("table_#{table.table_id}")
 		sub = channel.subscribe("sub_table_#{table.table_id}")
 		hsh = {:table => table, :min_players => 2,
 				:game => network_game, :name => "Table #{table.table_id}", :mutex => MutexTwo.new,
@@ -194,8 +285,14 @@ class PokerServer
 		player_channel = @players[player.player_id][:response_channel]
 		table_sub = @tables[table.table_id][:subscription]
 		log "Telling player #{player.name} to join table"
-		hsh = {"type" => "table_subscription", "url" => table_sub.url,
-			"capability" => table_sub.capability}
+		hsh = {"type" => "table_subscription", 
+      "table" => {
+        "url" => table_sub.url,
+        "capabilities" => {
+          'events' => table_sub.capabilities['events']
+        }
+      }
+    }
 		log hsh, true
 		player_channel.publish(hsh.to_json)
 		log "Done telling player #{player.name} to join table"
@@ -275,5 +372,17 @@ class PokerServer
 				'id' => tourney_number}.to_json)
 		end
 		log "Tournament created"
-	end
+  end
+
+  def get_channel(name)
+    @application.get_channel(name) rescue @application.create_channel(name)
+  end
+  
+  def new_sub(data)
+    Spire::API::Subscription.new(@spire.api, data)
+  end
+  
+  def new_channel(data)
+    Spire::API::Channel.new(@spire.api, data)
+  end
 end #class PokerServer

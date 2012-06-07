@@ -4,9 +4,12 @@ require 'rubygems'
 require 'spire_io'
 
 class PokerAdmin
-	def initialize(admin_url, admin_capability, api_url)
+	def initialize(email, password, app_name = "PokerMatic", api_url = 'https://api.spire.io')
 		@spire = Spire.new(api_url)
-		@admin_channel = new_channel(admin_url, admin_capability)
+    @spire.login(email, password)
+    @application = @spire.session.find_or_create_application(app_name)
+    @admin_member = @application.authenticate(email, password)
+		@admin_channel = new_channel(@admin_member.profile['admin'])
 	end
 
 	def create_tournament
@@ -49,14 +52,12 @@ class PokerAdmin
 		new_min > 55 ? 55 : new_min
 	end
 
-	def new_sub(url, capability)
-		Spire::Subscription.new(@spire,
-			{'capability' => capability, 'url' => url})
+	def new_sub(data)
+		Spire::Subscription.new(@spire, data)
 	end
 	
-	def new_channel(url, capability)
-		Spire::Channel.new(@spire,
-			{'capability' => capability, 'url' => url})
+	def new_channel(url, capabilities)
+		Spire::Channel.new(@spire, data)
 	end
 end
 
@@ -65,8 +66,11 @@ if File.exists?(config_file_location)
 	require config_file_location
 	unless defined?(API_URL)
 		API_URL = "https://api.spire.io"
-	end
-	Admin = PokerAdmin.new(ADMIN_URL, ADMIN_CAPABILITY, API_URL)
+  end
+  unless defined?(APP_NAME)
+    APP_NAME = "PokerMatic"
+  end
+	Admin = PokerAdmin.new(SPIRE_EMAIL, SPIRE_PASSWORD, APP_NAME, API_URL)
 	def ct
 		Admin.create_tournament
 	end

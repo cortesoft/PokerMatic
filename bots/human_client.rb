@@ -100,7 +100,8 @@ class HumanClient < PokerBotBase
 		if state['players_waiting_to_join'].size > 0
 			puts "Players waiting to join: #{state['players_waiting_to_join'].map {|x| x['name']}.join(", ")}"
 		end
-		if td = data['tournament']
+		if data.tournament?
+      td = data['tournament']
 			puts "Tournament: #{td['players_left']}/#{td['total_players']} with #{td['number_of_tables']}"
 			puts "Finish order: #{td['finished'].join(', ')}"
 		end

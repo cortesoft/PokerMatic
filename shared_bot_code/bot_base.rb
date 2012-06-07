@@ -27,55 +27,64 @@ end
 class PokerBotBase
 	attr_accessor :player_id, :mutex, :name
 
-	def initialize(discovery_url = nil, discovery_capability = nil)
+	def initialize(app_id = nil)
 		@mutex = MutexTwo.new
 		@player_id = nil
 		@spire = Spire.new(API_URL)
 		@table_channel = nil
 		@hand_hash = {}
-		discovery_url ||= get_discovery_url
-		discovery_capability ||= get_discovery_capability
-		d_sub = new_sub(discovery_url, discovery_capability)
-		@discovery = JSON.parse(d_sub.listen.last)
+    @app_id = app_id
+		@app_id ||= get_app_id
+    @application = @spire.api.get_application(@app_id)
+		#d_sub = new_sub(discovery_url, discovery_capability)
+		#@discovery = JSON.parse(d_sub.listen.last)
 	end
 	
-	def get_discovery_url
-		if defined?(DISCOVERY_URL)
-			DISCOVERY_URL
-		else
-			puts "Discovery url?"
-			gets.chomp
-		end
-	end
-	
-	def get_discovery_capability
-		if defined?(DISCOVERY_CAPABILITY)
-			DISCOVERY_CAPABILITY
-		else
-			puts "Discovery capability?"
-			gets.chomp
-		end
-	end
+  def login_member
+    @member = @application.authenticate(@login, @password)
+  end
+
+  def create_member
+    @member = @application.create_member(:login => @login, :password => @password, :email => @email)
+  end
+
+  def member_taken
+    raise "Failed to create or login a poker player with the login #{@login}.  If you have created a player with this" +
+      " login before, please make sure your login and password are correct"
+  end
+
+  def setup_discovery
+    #TODO: Does anything else need to happen here?
+    @discovery = @member['profile']
+  end
 
 	#Registers a user with the given name and waits for the server to respond with the created user
-	def create_user(name)
-		@mutex.synchronize do
-			@name = name
-			@reg_response = new_sub(@discovery['registration_response']['url'],
-				@discovery['registration_response']['capability'])
-			@command_id = rand(99999999)
-			@reg_response.last = (Time.now.to_i * 1000) - 5
-			@reg_response.add_listener('reg_response') {|m| user_created(m)}
-			@reg_response.start_listening
-			@create_player_channel = new_channel(@discovery['registration']['url'],
-				@discovery['registration']['capability'])
-			hsh = {'name' => name, 'id' => @command_id}
-			if USE_ENCRYPTION
-				@encryption_keys = OpenSSL::PKey::RSA.generate(1024)
-				hsh['public_key'] = @encryption_keys.public_key
-			end
-			@create_player_channel.publish(hsh.to_json)
-		end
+	def create_user(login = nil, password = nil, email = nil)
+    @login = login || get_member_login
+    @password = password || get_member_password
+    @email = email || get_member_email
+    login_member rescue create_member #rescue member_taken
+    setup_discovery
+		@reg_response = new_sub(@discovery['registration_response'])
+		@command_id = rand(99999999)
+		@reg_response.last = (Time.now.to_i * 1000) - 5
+		@reg_response.add_listener('message', 'reg_response') {|m|
+      begin
+        user_created(m.content)
+      rescue
+        puts "Error with user created: #{$!}"
+        pp $!.backtrace
+      end
+    }
+		@reg_response.start_listening
+		@create_player_channel = new_channel(@discovery['registration'])
+		hsh = {'login' => @login, 'id' => @command_id}
+    if USE_ENCRYPTION
+      @encryption_keys = OpenSSL::PKey::RSA.generate(1024)
+      hsh['public_key'] = @encryption_keys.public_key
+    end
+
+		@create_player_channel.publish(hsh.to_json)
 		wait_for_player_to_be_created
 	end
 
@@ -94,30 +103,31 @@ class PokerBotBase
 	#Callback for whenever a user is created.  If the created user was created by this client,
 	#set the current user to the newly created user
 	def user_created(m)
+    pp "GOT response:" 
 		resp = JSON.parse(m)
+    pp resp
 		if resp['command_id'] == @command_id
-			@mutex.synchronize do
-				if USE_ENCRYPTION
-					cap = @encryption_keys.private_decrypt(OpenPGP.dearmor(resp['encrypted_capability']))
-					resp_cap = @encryption_keys.private_decrypt(OpenPGP.dearmor(resp['encrypted_response_capability']))
-				else
-					cap = resp['capability']
-					resp_cap = resp['response_capability']
-				end
-				@player_channel = new_channel(resp['url'], cap)
-				@player_updates = new_sub(resp['response_url'], resp_cap)
-				@player_updates.add_listener('player_update') {|mess| table_update_proxy(mess)}
+      if resp['status'] == 'registered'
+        @member = @application.authenticate(@login, @password)
+        setup_discovery
+        pp @discovery
+				@player_channel = new_channel(@discovery['player_channel'])
+				@player_updates = new_sub(@discovery['player_response'])
+				@player_updates.add_listener('message', 'player_update') {|mess| table_update_proxy(mess.content)}
 				@player_updates.start_listening
 				@player_id = resp['player_id']
-			end
+  		elsif resp['status'] == 'failed'
+        puts "Failed to register for user #{@login}!"
+      end
 		end
 	end
 
 	def subscribe_to_table(parsed)
+    puts "Subscribing to table" 
 		@table_channel.stop_listening if @table_channel
-		@table_channel = new_sub(parsed['url'], parsed['capability'])
-		@table_channel.last = ((Time.now.to_i - 5) * 1000)
-		@table_channel.add_listener('table_update') {|mess| table_update_proxy(mess)}
+		@table_channel = new_sub(parsed['table'])
+		#@table_channel.last = ((Time.now.to_i - 5) * 1000)
+		@table_channel.add_listener('message', 'table_update') {|mess| table_update_proxy(mess.content)}
 		@table_channel.start_listening
 	end
 
@@ -134,12 +144,17 @@ class PokerBotBase
 	#Listener for table updates, proxys the requests to the correct handler
 	def table_update_proxy(m)
 		parsed = JSON.parse(m)
+    #puts "TABLE UPDATE:"
+    #pp parsed
 		case parsed['type']
 			when 'game_state' then game_state_update(parsed)
 			when 'winner' then winner_update(parsed)
 			when 'error' then invalid_move(parsed)
 			when 'table_subscription' then subscribe_to_table(parsed)
-		end
+    end
+  rescue
+    puts "Error during table update: #{$!.inspect}"
+    pp $!.backtrace
 	end
 
 	def decrypt_hand(encrypted_hand)
@@ -224,12 +239,16 @@ class PokerBotBase
 	# @param [String] blinds Starting small blind for the table
 	def create_table(name, min_players = 2, blinds = 1)
 		raise "No player yet!" unless @player_id
-		@table_response = new_sub(@discovery['tables']['url'],
-				@discovery['tables']['capability'])
-		@create_table_channel = new_channel(@discovery['create_table']['url'],
-				@discovery['create_table']['capability'])
+		@table_response = new_sub(@discovery['tables'])
+		@create_table_channel = new_channel(@discovery['create_table'])
 		@table_response.last = (Time.now.to_i * 1000) - 5
-		@table_response.add_listener('table_response') {|m| my_table_created(m)}
+		@table_response.add_listener('message', 'table_response') {|m|
+      begin
+        my_table_created(m.content)
+      rescue
+        puts "Error with my table created: #{$!.inspect}"
+      end
+    }
 		@table_response.start_listening
 		@create_table_channel.publish({'name' => name, 'id' => @player_id,
 			'min_players' => min_players, 'blinds' => blinds}.to_json)
@@ -238,15 +257,15 @@ class PokerBotBase
 	# Get a listing of all available tables
 	# @return [Array] An array of hashes describing each table
 	def get_all_tables
-		tc = new_sub(@discovery['tables']['url'], @discovery['tables']['capability'])
-		tc.listen.map {|x| JSON.parse(x) rescue nil}.compact
+		tc = new_sub(@discovery['tables'])
+		tc.poll[:messages].map {|x| pp x; JSON.parse(x.content) rescue nil}.compact
 	end
 
 	# Get a listing of all available tables
 	# @return [Array] An array of hashes describing each table
 	def get_all_tournaments
-		tc = new_sub(@discovery['tournaments']['url'], @discovery['tournaments']['capability'])
-		tc.listen.map {|x| JSON.parse(x) rescue nil}.compact
+		tc = new_sub(@discovery['tournaments'])
+		tc.poll[:messages].map {|x| JSON.parse(x.content) rescue nil}.compact
 	end
 
 	#Displays all available tables and prompts to join one
@@ -299,16 +318,48 @@ class PokerBotBase
 		raise "Subclass does not define ask_for_move!"
 	end
 
-	def new_sub(url, capability)
-		Spire::Subscription.new(@spire,
-			{'capability' => capability, 'url' => url})
+	def new_sub(data)
+		Spire::API::Subscription.new(@spire.api, data)
 	end
 	
-	def new_channel(url, capability)
-		Spire::Channel.new(@spire,
-			{'capability' => capability, 'url' => url})
+	def new_channel(data)
+		Spire::API::Channel.new(@spire.api, data)
 	end
 
+  def get_app_id
+    if defined?(APP_KEY)
+      APP_KEY
+    else
+      puts "App ID?"
+      gets.chomp
+    end
+  end
+
+  def get_member_login
+    if defined?(POKER_LOGIN) and POKER_LOGIN
+      POKER_LOGIN
+    else
+      puts "Poker Login?"
+      gets.chomp
+    end
+  end
+
+  def get_member_email
+    if defined?(POKER_EMAIL) and POKER_EMAIL
+      POKER_EMAIL
+    else
+      nil
+    end
+  end
+  
+  def get_member_password
+    if defined?(POKER_PASSWORD) and POKER_PASSWORD
+      POKER_PASSWORD
+    else
+      puts "Poker Member Password?"
+      gets.chomp
+    end
+  end
 	#A class representing the current state of the game
 	class GameState
 		attr_accessor :hand, :player_id
