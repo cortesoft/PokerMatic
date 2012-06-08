@@ -10,52 +10,49 @@ Both the PokerServer and PokerBots require the same following dependencies:
 
 * JRuby is recommended for threading performance
 ** http://jruby.org/download
-** *If you choose not to use jruby, you will need to change the shebang line in the bin files*
+** *If you choose not to use jruby, you may need to change the shebang line in the bin files*
 * Install the spire.io.rb gem (https://github.com/spire-io/spire.io.rb)
 ** jgem install spire_io --pre
-* Install OpenPGP
+* Install OpenPGP and Gibberish (for encryption)
 ** jgem install openpgp
+** jgem install gibberish
 
 h2. Setting up your config file
 
 Both the server and client libraries read their settings from a file *config.rb*.  Make a copy
 of *config_example.rb* and name it *config.rb* in the root directory of PokerMatic.
 
-To run a server, the only value that you may want to set is *API_KEY*  This should be your spire.io
-API key.  (You can sign up for a spire.io account at http://www.spire.io/register.html)  If you don't
-set the value of API_KEY, the server will create a new account for you.
+To run a server, the only values that you need to set are *SPIRE_EMAIL* and *SPIRE_PASSWORD* This should be your spire.io
+credentials.  (You can sign up for a spire.io account at http://www.spire.io/register.html)  If an account doesn't exist for that email,
+a new account will be created.
 
-Once the poker server is started (by running bin/poker_server), a discovery url and capability will
-be displayed.  These are the two values clients will need in order to connect to the server.
-Set *DISCOVERY_URL* and *DISCOVERY_CAPABILITY* to the correct values in config.rb.  If you are connecting
-to a poker server running somewhere else, you need to get the url and capability from the server admin.
+Once the poker server is started (by running bin/poker_server), an *APP_KEY* will be displayed.
+This is the value that clients will need in order to connect to the server.
+Copy the displayed line into your config file.  If you are connecting
+to a poker server running somewhere else, you will need their APP_KEY to connect.
 
 h2. Running a poker server
 
 Starting up the poker server is as simple as running bin/poker_server.  Since all communication 
 occurs through spire.io, there is no need to worry about DNS, IP addresses, or port forwarding.
-The only thing clients will need are the two values URL and capability that are displayed when the server starts up.
+The only thing clients will need is the APP_KEY that is displayed when the server starts up.
 
 Here is an example output when a server starts up:
 
 pre. >$ bin/poker_server.rb
 Starting up server
-Creating new account
 Server running:
-DISCOVERY_URL = 'http://build.spire.io/account/Ac-hageahljahe-wwA/subscription/Su-agea'
-DISCOVERY_CAPABILITY = 'jbpE5zzOJ_KDAGEOmJgw'
-ADMIN_URL = 'http://build.spire.io/account/Ac-hageahljahe-wwA/channel/Ch-hkxiz'
-ADMIN_CAPABILITY = 'EjslMULKXOZExHuQ0A'
+APP_KEY = 'Ap-JQY'
 
-p. *Simply copy the last 4 lines that are outputted into your config.rb file*
+p. *Simply copy the last line printed into your config.rb file*
 
 h2. Connecting a bot to the server
 
 You then have two ways to run a bot; as a single bot by running bin/bot or as a cluster of bots by running bin/bot_cluster.
-First make sure you have set your DISCOVERY_URL and DISCOVERY_CAPABILITY in config.rb to match the server you are trying to
+First make sure you have set your APP_KEY in your config.rb to match the server you are trying to
 connect to, and then run either bin/bot or bin/bot_cluster; bin/bot will ask you which class of bot you want to run, while bin/bot_cluster
-will ask how many bots of each class you want to run.  After the bots are created, you will be given the choice to either join a
-table or a tournament.
+will ask how many bots of each class you want to run.  After the bots are created, you will be given the choice to either create a new table,
+join an existing table, or join a tournament.
 
 Here is an example from bin/bot:
 
@@ -101,16 +98,14 @@ h2. Creating and joining a tournament
 
 A PokerMatic tournament allows you to run a multi-table tournament with many bots competing against each other.  The tournament
 code will take care of splitting players into tables of 10, rebalancing tables as players are eliminated, and also keep track
-of blind increases over time.  The tournament is over when only one bot remains!
+of blind increases over time.  Each player starts with 5000 chips.  The tournament is over when only one bot remains!
 
-To create a tournament, you need to use the admin tool. First make sure you have set your *ADMIN_URL* and *ADMIN_CAPABILITY*
-in config.rb to match the server you are trying to connect to.
+To create a tournament, you need to use the admin tool. The admin tool will use the *SPIRE_EMAIL* and *SPIRE_PASSWORD* from your
+config.rb file, so make sure those values match the values that the server is using.
 
 The easiest way to use it is from IRB.
 
-pre. $> irb
-> require 'bin/admin'
-> Admin.create_tournament
+pre. $> bin/admin
 Tournament name?
 > Awesome Tournament
 1: Wed Feb 01 17:20:00 -0800 2012
@@ -131,11 +126,11 @@ Tournament name?
 Time?
 > 3
 Starting Blinds?
-> 1
+> 25
 Increase blinds every how many seconds?
 > 600
 
-p. This will create a tournament that starts at 5:22 PM with blinds starting at 1 and increasing every 10 minutes.
+p. This will create a tournament that starts at 5:22 PM with blinds starting at 25 and increasing every 10 minutes.
 
 To join the tournament with a bot:
 

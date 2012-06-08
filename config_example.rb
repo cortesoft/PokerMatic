@@ -2,7 +2,7 @@
 #The following value is outputted by the server when it starts up
 APP_KEY = 'app key'
 
-#You can enter your poker username and password so you don't have to renter it every time
+#You can enter your poker username and password so you don't have to re-enter it every time you join a server
 POKER_LOGIN = nil
 POKER_PASSWORD = nil
 POKER_EMAIL = nil
