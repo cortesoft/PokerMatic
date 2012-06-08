@@ -15,7 +15,7 @@ class HumanClient < PokerBotBase
 		if game_state.in_this_hand? and game_state.hand
 			puts "Your hole cards are:"
 			puts "| #{game_state.hand.map {|x| x['string']}.join(" | ")} |"
-		else
+	  else
 			puts "You are not in this hand.  You will join at the end of this hand"
 		end
 		puts "\n\n"

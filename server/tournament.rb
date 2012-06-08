@@ -43,8 +43,13 @@ class Tournament
 	def join_tournament(player, channel)
 		@mutex.synchronize do
 			if !@started
-				@channel_hash[player] = channel
-				@players << player
+        if !@channel_hash[player]   
+				  @channel_hash[player] = channel
+				  @players << player
+          log "#{player.name} is in the tournament.  Tournament now has #{@player.size} entrants"
+				else
+          log "#{player.name} has already joined the tournament!"  
+        end
 			else
 				log "#{player.name} can't join the tournament, as it has already started"
 			end
@@ -124,6 +129,8 @@ class Tournament
 	def hand_finished_callback(network_game)
 		should_start_hand = false
 		log "Starting hand finished for network_game table #{network_game.table.table_id}"
+    log "Current tourney stats:"
+    pp tourney_stats(network_game.table)
 		@mutex.synchronize do
 			network_game.add_players_from_queue
 			remove_busted_players(network_game.table)

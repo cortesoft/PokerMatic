@@ -33,7 +33,7 @@ bl.bot_map.each do |klass, class_name|
 		while !user_created
 		  puts "Creating #{klass} client #{name}"
 		  client = klass.new
-		  user_created = client.create_user(name, 'password')
+		  user_created = client.create_user(name, "password_#{rand(5000)}") rescue nil
 		  if !user_created
 		    puts "#{name} already taken"
 		    while all_names.include?(name)
@@ -48,6 +48,7 @@ end
 puts "Tournament or table? (1 = tournament, 2 = table)"
 if gets.chomp.to_i == 1
 	hsh = all_clients.first.ask_to_choose_tournament
+	puts "Telling #{all_clients.size} bots to join tournament"
 	all_clients.each do |c|
 		puts "#{c.name} joining the tourney"
 		c.join_specific_tournament(hsh)

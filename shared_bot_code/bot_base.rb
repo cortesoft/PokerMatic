@@ -134,7 +134,8 @@ class PokerBotBase
 	end
 
 	def join_specific_tournament(data)
-		@player_channel.publish({'tournament_id' => data['id'], 'command' => 'join_tournament'}.to_json)
+    puts "#{@login} joining tournament #{data['id']}" 
+		@player_channel.publish({'tournament_id' => data['id'], 'command' => 'join_tournament', 'rand' => rand(1000)}.to_json)
 	end
 
 	#Listener for table updates, proxys the requests to the correct handler
