@@ -20,13 +20,28 @@ bl.bot_classes.each do |klass|
 		nums[klass] = gets.chomp.to_i
 	end
 end
+all_names = []
 bl.bot_map.each do |klass, class_name|
 	nums[klass].times do
 		name = names.shift
-		name = "#{class_name} #{name}"
-		puts "Creating #{klass} client #{name}"
-		client = klass.new
-		client.create_user(name)
+		name = "#{class_name}_#{name}"
+		while all_names.include?(name)
+		  name += "_"
+		end
+		all_names << name
+		user_created = false
+		while !user_created
+		  puts "Creating #{klass} client #{name}"
+		  client = klass.new
+		  user_created = client.create_user(name, 'password')
+		  if !user_created
+		    puts "#{name} already taken"
+		    while all_names.include?(name)
+          name += "_"
+        end
+		    all_names << name
+		  end
+		end
 		all_clients << client
 	end
 end

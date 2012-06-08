@@ -1,8 +1,11 @@
 require 'rubygems'
 require 'pp'
 require 'spire_io'
-require 'openssl'
+require 'gibberish'
 require 'openpgp'
+
+#Fixes a super strange bug with OpenPGP where it can't find internal constants
+::OpenPGP::Armor.decode(::OpenPGP::Armor.encode('hello'))
 
 ["network_game", "quick_game", "tournament"].each do |fname|
 	require File.expand_path("#{File.dirname(__FILE__)}/#{fname}.rb")
@@ -158,12 +161,10 @@ class PokerServer
       log "Got member id from my own profile"
       return id
     end
-    log "Mutexing"
 		@mutex.synchronize do
 			@player_number += 1
 			@player_number
       if member
-        log "Preparing Updating member"
         profile = @server_member['profile']
         profile['player_ids'][member['login']] = @player_number
         log "updating member"
@@ -193,8 +194,8 @@ class PokerServer
       return
     end
 		pnum = get_next_player_number(member)
-		p = Player.new(command['login'], pnum, 500, command['public_key'])
     profile = member['profile']
+		p = Player.new(command['login'], pnum, 500, profile['encryption_key'])
 		channel = get_channel("player_#{pnum}")
 		sub = channel.subscribe
 		sub.add_listener('message', "player_action") {|m| process_player_action(p, m.content)}
@@ -226,9 +227,9 @@ class PokerServer
 	def encrypt_capabilities(resp_hash, public_key)
 		public_key_encrypter = OpenSSL::PKey::RSA.new(public_key)
 		rc = public_key_encrypter.public_encrypt(resp_hash.delete('response_capability'))
-		resp_hash['encrypted_response_capability'] = OpenPGP.enarmor(rc)
+		resp_hash['encrypted_response_capability'] = ::OpenPGP::Armor.encode(rc)
 		c = public_key_encrypter.public_encrypt(resp_hash.delete('capability'))
-		resp_hash['encrypted_capability'] = OpenPGP.enarmor(c)
+		resp_hash['encrypted_capability'] = ::OpenPGP::Armor.encode(c)
 	end
 
 	#Process a create table request from the tables channel

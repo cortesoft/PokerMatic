@@ -250,7 +250,7 @@ class Tournament
 
 	def current_small_blind
 		l = current_level
-		multiplier = l > BLIND_LEVELS.size ? BLIND_LEVELS.last : BLIND_LEVELS[l]
+		multiplier = l >= BLIND_LEVELS.size ? BLIND_LEVELS.last : BLIND_LEVELS[l]
 		sb = @small_blind * multiplier
 		log "#{(Time.now - @start_time).to_i} seconds have gone by, so the level is #{l}, blind timer is #{@blind_timer} with blind is now at #{sb}"
 		sb

@@ -2,6 +2,11 @@ require 'rubygems'
 require 'pp'
 require 'timeout'
 require 'spire_io'
+require 'gibberish'
+require 'openpgp'
+
+#Fixes a super strange bug with OpenPGP where it can't find internal constants
+::OpenPGP::Armor.decode(::OpenPGP::Armor.encode('hello'))
 
 config_file_location = File.expand_path("#{File.dirname(__FILE__)}/../config.rb")
 require config_file_location if File.exists?(config_file_location)
@@ -11,12 +16,6 @@ end
 require File.expand_path("#{File.dirname(__FILE__)}/../utils/mutex_two.rb")
 require File.expand_path("#{File.dirname(__FILE__)}/../poker/poker.rb")
 
-if !defined?(USE_ENCRYPTION) or USE_ENCRYPTION
-	require 'openpgp'
-	require 'openssl'
-else
-	USE_ENCRYPTION = false
-end
 
 #The PokerBotBase class contains all the code needed to create PokerServer clients
 #This class should be extended to create your own client; it will not work on its own
@@ -63,8 +62,12 @@ class PokerBotBase
     @login = login || get_member_login
     @password = password || get_member_password
     @email = email || get_member_email
-    login_member rescue create_member #rescue member_taken
+    login_member rescue create_member rescue member_taken
     setup_discovery
+    @key = ::OpenPGP::Armor.encode(Digest::SHA2.new(256).digest(@password))
+    @discovery['encryption_key'] = @key
+    @member.update(:profile => @discovery)
+    @cipher = Gibberish::AES.new(@key)
 		@reg_response = new_sub(@discovery['registration_response'])
 		@command_id = rand(99999999)
 		@reg_response.last = (Time.now.to_i * 1000) - 5
@@ -79,11 +82,6 @@ class PokerBotBase
 		@reg_response.start_listening
 		@create_player_channel = new_channel(@discovery['registration'])
 		hsh = {'login' => @login, 'id' => @command_id}
-    if USE_ENCRYPTION
-      @encryption_keys = OpenSSL::PKey::RSA.generate(1024)
-      hsh['public_key'] = @encryption_keys.public_key
-    end
-
 		@create_player_channel.publish(hsh.to_json)
 		wait_for_player_to_be_created
 	end
@@ -98,19 +96,17 @@ class PokerBotBase
 			sleep 1
 		end
 		@reg_response.stop_listening if @reg_response
+    true
 	end
 
 	#Callback for whenever a user is created.  If the created user was created by this client,
 	#set the current user to the newly created user
 	def user_created(m)
-    pp "GOT response:" 
 		resp = JSON.parse(m)
-    pp resp
 		if resp['command_id'] == @command_id
       if resp['status'] == 'registered'
         @member = @application.authenticate(@login, @password)
         setup_discovery
-        pp @discovery
 				@player_channel = new_channel(@discovery['player_channel'])
 				@player_updates = new_sub(@discovery['player_response'])
 				@player_updates.add_listener('message', 'player_update') {|mess| table_update_proxy(mess.content)}
@@ -144,8 +140,6 @@ class PokerBotBase
 	#Listener for table updates, proxys the requests to the correct handler
 	def table_update_proxy(m)
 		parsed = JSON.parse(m)
-    #puts "TABLE UPDATE:"
-    #pp parsed
 		case parsed['type']
 			when 'game_state' then game_state_update(parsed)
 			when 'winner' then winner_update(parsed)
@@ -161,8 +155,18 @@ class PokerBotBase
 		encrypted_hand.map do |card|
 			ret = {}
 			card.each do |key, value|
-				ret[key] = @encryption_keys.private_decrypt(OpenPGP.dearmor(value))
-				ret[key] = ret[key].to_i if key == "value"
+        begin
+          text = ::OpenPGP::Armor.decode(value)
+				  ret[key] = @cipher.dec(text)
+				  ret[key] = ret[key].to_i if key == "value"
+				rescue
+          puts "Error decrypting hand! #{$!.inspect}"
+          puts "Entire encrypted hand:"
+          pp encrypted_hand
+          puts "Bad key: #{key}"
+          puts "Bad value: #{value}"
+          puts "Unarmored: #{::OpenPGP::Armor.decode(value)}"
+        end
 			end
 			ret
 		end

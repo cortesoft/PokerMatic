@@ -80,13 +80,13 @@ class NetworkGame
 	end
 
 	def encrypt_hand(player, hand)
-		return hand unless player.public_key
+		return hand unless player.encryption_key
 		ret = []
-		public_key_encrypter = OpenSSL::PKey::RSA.new(player.public_key)
+		cipher = Gibberish::AES.new(player.encryption_key)
 		hand.each do |card|
 			card_hash = {}
 			card.each do |key, value|
-				card_hash[key] = OpenPGP.enarmor(public_key_encrypter.public_encrypt(value.to_s))
+				card_hash[key] = ::OpenPGP::Armor.encode(cipher.enc(value.to_s))
 			end
 			ret << card_hash
 		end

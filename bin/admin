@@ -8,8 +8,8 @@ class PokerAdmin
 		@spire = Spire.new(api_url)
     @spire.login(email, password)
     @application = @spire.session.find_or_create_application(app_name)
-    @admin_member = @application.authenticate(email, password)
-		@admin_channel = new_channel(@admin_member.profile['admin'])
+    @admin_member = @application.authenticate("Admin", password)
+		@admin_channel = new_channel(@admin_member['profile']['admin'])
 	end
 
 	def create_tournament
@@ -53,11 +53,11 @@ class PokerAdmin
 	end
 
 	def new_sub(data)
-		Spire::Subscription.new(@spire, data)
+		Spire::API::Subscription.new(@spire.api, data)
 	end
 	
-	def new_channel(url, capabilities)
-		Spire::Channel.new(@spire, data)
+	def new_channel(data)
+		Spire::API::Channel.new(@spire.api, data)
 	end
 end
 
@@ -74,4 +74,5 @@ if File.exists?(config_file_location)
 	def ct
 		Admin.create_tournament
 	end
+	Admin.create_tournament
 end

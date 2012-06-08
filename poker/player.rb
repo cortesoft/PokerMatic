@@ -1,11 +1,11 @@
 module PokerMatic
 class Player
-	attr_reader :bankroll, :name, :player_id, :public_key
-	def initialize(name, player_id = nil, bankroll = 500, pk = nil)
+	attr_reader :bankroll, :name, :player_id, :encryption_key
+	def initialize(name, player_id = nil, bankroll = 500, key = nil)
 		@bankroll = bankroll
 		@name = name
 		@player_id = player_id.to_i
-		@public_key = pk
+		@encryption_key = key
 	end
 
 	def make_bet(amount)
