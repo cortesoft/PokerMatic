@@ -70,7 +70,7 @@ class PokerBotBase
     @cipher = Gibberish::AES.new(@key)
 		@reg_response = new_sub(@discovery['registration_response'])
 		@command_id = rand(99999999)
-		@reg_response.last = (Time.now.to_i * 1000) - 5
+		@reg_response.last = (Time.now.to_i * 1000 * 1000) - 5
 		@reg_response.add_listener('message', 'reg_response') {|m|
       begin
         user_created(m.content)
@@ -135,7 +135,7 @@ class PokerBotBase
 
 	def join_specific_tournament(data)
     puts "#{@login} joining tournament #{data['id']}" 
-		@player_channel.publish({'tournament_id' => data['id'], 'command' => 'join_tournament', 'rand' => rand(1000)}.to_json)
+		@player_channel.publish({'tournament_id' => data['id'], 'command' => 'join_tournament'}.to_json)
 	end
 
 	#Listener for table updates, proxys the requests to the correct handler
@@ -246,7 +246,7 @@ class PokerBotBase
 		raise "No player yet!" unless @player_id
 		@table_response = new_sub(@discovery['tables'])
 		@create_table_channel = new_channel(@discovery['create_table'])
-		@table_response.last = (Time.now.to_i * 1000) - 5
+		@table_response.last = ((Time.now.to_i - 5) * 1000 * 1000)
 		@table_response.add_listener('message', 'table_response') {|m|
       begin
         my_table_created(m.content)

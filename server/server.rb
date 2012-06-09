@@ -88,7 +88,7 @@ class PokerServer
 	def create_admin_channels
 		@admin = get_channel('admin')
 		@admin_sub = @admin.subscribe
-		@admin_sub.last = (Time.now.to_i * 1000)
+		@admin_sub.last = (Time.now.to_i * 1000 * 1000)
 		@admin_sub.add_listener('message', "admin_sub") {|m| process_admin_command(m.content)}
 		@admin_sub.start_listening
     profile = @server_member['profile']
@@ -128,7 +128,7 @@ class PokerServer
 
 	def setup_listeners
 		@registration_sub = @registration.subscribe
-		@registration_sub.last = (Time.now.to_i * 1000)
+		@registration_sub.last = (Time.now.to_i * 1000 * 1000)
 		@registration_sub.add_listener('message', 'reg_sub') {|m|
       begin
         process_registration(m.content)
@@ -138,6 +138,7 @@ class PokerServer
     }
 		@registration_sub.start_listening
 		@create_table_sub = @create_table_channel.subscribe
+    @create_table_sub.last = (Time.now.to_i * 1000 * 1000)
 		@create_table_sub.add_listener('message', 'create_table') {|m|
       begin
         process_create_table(m.content)
@@ -198,6 +199,7 @@ class PokerServer
 		p = Player.new(command['login'], pnum, 500, profile['encryption_key'])
 		channel = get_channel("player_#{pnum}")
 		sub = channel.subscribe
+    sub.last = (Time.now.to_i * 1000 * 1000)
 		sub.add_listener('message', "player_action") {|m| process_player_action(p, m.content)}
 		sub.start_listening
 		player_response = get_channel("player_response_#{pnum}")
@@ -362,7 +364,7 @@ class PokerServer
 		starting_blinds = command['starting_blinds'] || 25
 		start_time = command['start_time'] ? Time.at(command['start_time']) : Time.now + 600
 		blind_timer = command['blind_timer'] || 300
-		start_chips = command['start_chips'] || 4000
+		start_chips = command['start_chips'] || 5000
 		tourney = Tournament.new(:server => self, :log_mutex => @log_mutex,
 			:tourney_id => tourney_number, :small_blind => starting_blinds,
 			:blind_timer => blind_timer, :name => name, :start_time => start_time,
