@@ -265,7 +265,7 @@ class Tournament
 
 	def current_ante
 		l = current_level
-		multiplier = l > ANTE_LEVELS.size ? ANTE_LEVELS.last : ANTE_LEVELS[l]
+		multiplier = l >= ANTE_LEVELS.size ? ANTE_LEVELS.last : ANTE_LEVELS[l]
 		ante = @small_blind * multiplier
 		log "#{(Time.now - @start_time).to_i} seconds have gone by, so the level is #{l}, blind timer is #{@blind_timer} with ante is now at #{ante}"
 		ante
