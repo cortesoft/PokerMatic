@@ -378,7 +378,7 @@ class PokerServer
   end
 
   def get_channel(name)
-    @application.get_channel(name) rescue @application.create_channel(name)
+    @application.get_channel(name) rescue @application.create_channel(name, {:message_limit => 100})
   end
   
   def new_sub(data)

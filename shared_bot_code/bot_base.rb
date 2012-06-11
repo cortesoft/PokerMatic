@@ -319,6 +319,10 @@ class PokerBotBase
 		game_state.available_moves['check'] ? 'check' : 'fold'
 	end
 
+  def check_call(game_state)
+    game_state.available_moves['check'] ? 'check' : 'call'
+  end
+
 	def ask_for_move(game_state)
 		raise "Subclass does not define ask_for_move!"
 	end
@@ -406,6 +410,14 @@ class PokerBotBase
 			@hand = hand
 		end
 		
+    def bankroll
+      me['bankroll'] 
+    end
+
+    def me
+      @state_hash['state']['players'].select {|p| p['id'] == @player_id}.first
+    end
+
 		# returns true if the client is in the hand
 		def in_this_hand?
 			@state_hash['state']['players'].any? {|p| p['id'] == @player_id}
@@ -424,6 +436,10 @@ class PokerBotBase
 			@_npih ||= @state_hash['state']['players_in_hand'].size
 		end
 		
+    def my_current_bet
+      @state_hash['state']['player_bets'][@player_id.to_s] || 0
+    end
+
 		#Returns the position of the acting player compared to the button (0 is button, 1 is the spot before the button)
 		def position
 			return 0 if self.button == self.acting_seat
