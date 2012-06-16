@@ -12,7 +12,8 @@ Both the PokerServer and PokerBots require the same following dependencies:
 ** http://jruby.org/download
 ** *If you choose not to use jruby, you may need to change the shebang line in the bin files*
 * Install the spire.io.rb gem (https://github.com/spire-io/spire.io.rb)
-** jgem install spire_io --pre
+** jgem install bundler
+** jgem install spire_io
 * Install OpenPGP and Gibberish (for encryption)
 ** jgem install openpgp
 ** jgem install gibberish

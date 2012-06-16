@@ -24,7 +24,7 @@ require File.expand_path("#{File.dirname(__FILE__)}/../poker/poker.rb")
 #is a representation of the current state of the game
 #NOTE: Make sure to call super on your subclass's initialize method
 class PokerBotBase
-	attr_accessor :player_id, :mutex, :name
+	attr_accessor :player_id, :mutex, :name, :in_game
 
 	def initialize(app_id = nil)
 		@mutex = MutexTwo.new
@@ -109,20 +109,26 @@ class PokerBotBase
         setup_discovery
 				@player_channel = new_channel(@discovery['player_channel'])
 				@player_updates = new_sub(@discovery['player_response'])
+        @player_updates.last = ((Time.now.to_i - 30) * 1000 * 1000)
 				@player_updates.add_listener('message', 'player_update') {|mess| table_update_proxy(mess.content)}
 				@player_updates.start_listening
 				@player_id = resp['player_id']
+        if @discovery['current_table']
+          puts "We have a current table, joining the existing table"
+          subscribe_to_table({'table' => @discovery['current_table']}, 30)
+        end
   		elsif resp['status'] == 'failed'
         puts "Failed to register for user #{@login}!"
       end
 		end
 	end
 
-	def subscribe_to_table(parsed)
+	def subscribe_to_table(parsed, seconds_to_listen_back_for = 5)
+    @in_game = true 
     puts "Subscribing to table" 
 		@table_channel.stop_listening if @table_channel
 		@table_channel = new_sub(parsed['table'])
-		#@table_channel.last = ((Time.now.to_i - 5) * 1000)
+		@table_channel.last = ((Time.now.to_i - seconds_to_listen_back_for) * 1000 * 1000)
 		@table_channel.add_listener('message', 'table_update') {|mess| table_update_proxy(mess.content)}
 		@table_channel.start_listening
 	end

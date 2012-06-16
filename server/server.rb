@@ -206,7 +206,7 @@ class PokerServer
 		pr_sub = player_response.subscribe
     player_hash = {:player => p, :id => pnum,
         :channel => channel, :subscription => sub, :response_channel => player_response,
-        :response_sub => pr_sub}
+        :response_sub => pr_sub, :member => member}
 		@mutex.synchronize do
 			@players[pnum] = player_hash
     end
@@ -298,7 +298,12 @@ class PokerServer
     }
 		log hsh, true
 		player_channel.publish(hsh.to_json)
-		log "Done telling player #{player.name} to join table"
+		log "Done telling player #{player.name} to join table, updating the member profile"
+    member = @players[player.player_id][:member]
+    profile = member['profile']
+    profile['current_table'] = hsh['table']
+    member.update(:profile => profile)
+    log "Done updating member profile for #{player.name}"
 	end
 
 	#Process a request from a player channel
